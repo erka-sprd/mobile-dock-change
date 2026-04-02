@@ -58,6 +58,15 @@ export default function App() {
   const barScrollRef = useRef<HTMLDivElement>(null);
   const [barScrollProgress, setBarScrollProgress] = useState(0);
 
+  const [showPopup, setShowPopup] = useState(true);
+  const [animating, setAnimating] = useState(false);
+
+  const dismissPopup = () => {
+    setShowPopup(false);
+    setAnimating(true);
+    setTimeout(() => setAnimating(false), 750);
+  };
+
   const blackBtnRef = useRef<HTMLButtonElement>(null);
   const blackBtnExpandedWidth = useRef<number | null>(null);
   const blackBtnAnimRef = useRef<number | null>(null);
@@ -148,6 +157,16 @@ export default function App() {
     lastPan: { x: 0, y: 0 },
     lastZoom: 1,
   });
+
+  useEffect(() => {
+    const id = "dock-bounce-keyframe";
+    if (!document.getElementById(id)) {
+      const s = document.createElement("style");
+      s.id = id;
+      s.textContent = `@keyframes dockBounce { 0% { transform: translateY(120px); } 60% { transform: translateY(-10px); } 80% { transform: translateY(4px); } 100% { transform: translateY(0); } } @keyframes dockBounceRight { 0% { transform: translateX(36px); opacity: 0; } 60% { transform: translateX(-4px); opacity: 1; } 80% { transform: translateX(2px); } 100% { transform: translateX(0); } }`;
+      document.head.appendChild(s);
+    }
+  }, []);
 
   useEffect(() => {
     const prevBodyMargin = document.body.style.margin;
@@ -366,7 +385,8 @@ export default function App() {
         height: "100dvh",
         display: "flex",
         flexDirection: "column",
-        overflow: "hidden",
+        overflowX: "hidden",
+        overflowY: "clip",
         fontFamily: '"Inter Variable", sans-serif',
         background: "#DEDEDE",
         overscrollBehavior: "none",
@@ -405,11 +425,11 @@ export default function App() {
           alignItems: "center",
           justifyContent: "center",
           position: "relative",
-          overflow: "hidden",
+          overflow: "clip",
           touchAction: "none",
         }}
       >
-        <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", overflow: "clip" }}>
           {slides.map((slide, slideIdx) => {
             const isActive = slideIdx === activeIndex;
             const isTarget = targetIndex !== null && slideIdx === targetIndex;
@@ -525,7 +545,7 @@ export default function App() {
       </div>
 
       {/* Bottom action bar */}
-      <div style={{ position: "relative", paddingTop: 12, paddingBottom: 20, flexShrink: 0 }}>
+      <div style={{ position: "relative", paddingTop: 12, paddingBottom: 20, flexShrink: 0, overflow: "visible" }}>
         {/* Scrollable gray buttons — offset by black button width */}
         <div
           ref={barScrollRef}
@@ -536,7 +556,7 @@ export default function App() {
           style={{
             display: "flex",
             gap: 8,
-            overflowX: "auto",
+            overflowX: animating ? "visible" : "auto",
             overflowY: "visible",
             paddingLeft: 16 + BAR_BTN_INITIAL + 8, /* kept as initial value; updated dynamically via animateBtnWidth */
             paddingBottom: 8,
@@ -546,16 +566,20 @@ export default function App() {
             touchAction: "pan-x",
           }}
         >
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
             <span>Change product</span>
           </button>
-          <button type="button" style={{ height: 46, padding: "2px 16px 2px 2px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+          <button type="button" style={{ height: 46, padding: "2px 16px 2px 2px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
             <img src="/img/preview.png" width={42} height={42} alt="" style={{ borderRadius: 999, display: "block" }} />
             <span>Preview</span>
           </button>
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 120ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
             <span>Embroidery</span>
             <img src="/icons/icon-caret-down.svg" width={16} height={16} alt="" />
+          </button>
+          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 180ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
+            <img src="/icons/icon-share.svg" width={18} height={18} alt="" />
+            <span>Share</span>
           </button>
           <div style={{ width: 16, flexShrink: 0 }} />
         </div>
@@ -579,6 +603,8 @@ export default function App() {
         <button
           type="button"
           style={{
+            animation: showPopup ? "none" : "dockBounceRight 0.5s cubic-bezier(0.34,1.56,0.64,1) 400ms both",
+            opacity: showPopup ? 0 : undefined,
             position: "absolute",
             right: 16,
             top: -64,
@@ -628,12 +654,50 @@ export default function App() {
             whiteSpace: "nowrap",
             boxShadow: barScrollProgress > 0 ? "0 4px 16px rgba(0,0,0,0.35)" : "none",
             transition: "box-shadow 0.4s ease, top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)",
+            animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms both",
+            transform: showPopup ? "translateY(200px)" : undefined,
           }}
         >
           <img src="/icons/icon-cart.svg" alt="Cart" style={{ width: 18, height: 18, filter: "invert(1)", flexShrink: 0 }} />
           <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute", left: 38 } : {}) }}>17,98 €</span>
         </button>
+
       </div>
+
+      {showPopup && (
+        <div id="onboarding-popup" style={{
+          position: "absolute",
+          bottom: 16,
+          left: 16,
+          right: 16,
+          background: "#fff",
+          borderRadius: 20,
+          padding: "24px 20px 20px",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
+          zIndex: 10,
+        }}>
+          <button
+            type="button"
+            onClick={dismissPopup}
+            style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", cursor: "pointer", padding: 4, lineHeight: 1 }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+          <p style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, textAlign: "center", lineHeight: 1.3 }}>
+            <span style={{ background: "var(--cyo-gradient-default, linear-gradient(90deg, var(--Red-600, #DC2626) -0.88%, var(--Blue-700, #4D52D2) 49.94%, var(--Green-600, #16A34A) 101.36%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>Start here to customize your product and print.</span>
+          </p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button type="button" style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer" }}>
+              <img src="/icons/icon-tag.svg" width={20} height={20} alt="" />
+              All products
+            </button>
+            <button type="button" style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer" }}>
+              <img src="/icons/icon-plus.svg" width={20} height={20} alt="" />
+              Add design
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
