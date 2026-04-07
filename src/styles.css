@@ -1,4 +1,23 @@
+
+:root {
+  --color-red-600: #DC2626;
+  --color-blue-700: #4D52D2;
+  --color-green-600: #16A34A;
+}
+
+.onboarding-text-gradient {
+  background: linear-gradient(90deg, var(--color-red-600) -0.88%, var(--color-blue-700) 49.94%, var(--color-green-600) 101.36%);
+  color: #0000;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
 .App {
   font-family: sans-serif;
   text-align: center;
+}
+
+.action-bar-btn:active {
+  background: #ededed !important;
+  transition: background 0.05s ease !important;
 }

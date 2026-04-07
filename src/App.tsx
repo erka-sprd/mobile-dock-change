@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Drawer } from "vaul";
 
 const BAR_BTN_INITIAL = 130;
 
@@ -7,6 +8,19 @@ const DEFAULT_COLOR = "softEcru";
 const HEADER = 56;
 const EDITOR_MIN = 170;
 const THRESHOLD = 10;
+
+const COLORS = [
+  { key: "black",       label: "Black" },
+  { key: "heathergrey", label: "Heather Grey" },
+  { key: "khaki",       label: "Khaki" },
+  { key: "mocha",       label: "Mocha" },
+  { key: "navyblue",    label: "Navy Blue" },
+  { key: "pinkjoy",     label: "Pink Joy" },
+  { key: "softEcru",    label: "Soft Ecru" },
+  { key: "stone",       label: "Stone" },
+  { key: "violet",      label: "Violet" },
+  { key: "white",       label: "White" },
+];
 
 const colorHasCloseup = (key: string) => key !== "mocha";
 
@@ -57,6 +71,8 @@ export default function App() {
   const horizontalGesture = useRef({ startX: 0, startY: 0, locked: false });
   const barScrollRef = useRef<HTMLDivElement>(null);
   const [barScrollProgress, setBarScrollProgress] = useState(0);
+  const [scrollAtEnd, setScrollAtEnd] = useState(false);
+  const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
 
   const [showPopup, setShowPopup] = useState(true);
   const [animating, setAnimating] = useState(false);
@@ -120,6 +136,7 @@ export default function App() {
     const max = el.scrollWidth - el.clientWidth;
     const progress = max > 0 ? el.scrollLeft / max : 0;
     setBarScrollProgress(progress);
+    setScrollAtEnd(max <= 0 || el.scrollLeft >= max - 4);
 
     if (isAnimatingRef.current) return;
 
@@ -384,12 +401,13 @@ export default function App() {
     <div
       style={{
         height: "100dvh",
+        position: "relative",
         display: "flex",
         flexDirection: "column",
         overflowX: "hidden",
         overflowY: "clip",
         fontFamily: '"Inter Variable", sans-serif',
-        background: "#DEDEDE",
+        background: "linear-gradient(300deg, #f2f2f2 0%, #e3e3e3 100%)",
         overscrollBehavior: "none",
         touchAction: "manipulation",
       }}
@@ -527,11 +545,6 @@ export default function App() {
               <img src="/icons/icon-arrow-forward.svg" alt="Redo" style={{ width: 20, height: 20 }} />
             </button>
           </div>
-          <button type="button" style={{ background: "#F4F4F4", border: "none", borderRadius: 999, height: 40, padding: "0 14px 0 10px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#111" }}>
-            <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#111", flexShrink: 0 }} />
-            Color
-            <img src="/icons/icon-caret-down.svg" alt="" style={{ width: 16, height: 16 }} />
-          </button>
           <button type="button" style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
             <img src="/icons/icon-dots-horizontal.svg" alt="More" style={{ width: 20, height: 20 }} />
           </button>
@@ -545,10 +558,14 @@ export default function App() {
         </div>
       </div>
 
+      {/* Bottom gradient backdrop */}
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 200, background: "linear-gradient(to top, rgba(0,0,0,0.07) 0%, rgba(242,242,242,0.07) 100%)", zIndex: 1, pointerEvents: "none" }} />
+
       {/* Bottom action bar */}
-      <div style={{ position: "relative", paddingTop: 12, paddingBottom: 20, flexShrink: 0, overflow: "visible" }}>
+      <div id="action-bar" style={{ position: "relative", paddingTop: 12, paddingBottom: 20, flexShrink: 0, overflow: "visible", zIndex: 2 }}>
         {/* Scrollable gray buttons — offset by black button width */}
         <div
+          id="action-bar-scroll"
           ref={barScrollRef}
           onScroll={handleBarScroll}
           onTouchStart={onHorizontalTouchStart}
@@ -560,30 +577,50 @@ export default function App() {
             overflowX: animating ? "visible" : "auto",
             overflowY: "visible",
             paddingLeft: 16 + BAR_BTN_INITIAL + 8, /* kept as initial value; updated dynamically via animateBtnWidth */
+            paddingTop: 8,
             paddingBottom: 8,
+            marginTop: -8,
             marginBottom: -8,
+            alignItems: "center",
             scrollbarWidth: "none",
             WebkitOverflowScrolling: "touch",
             touchAction: "pan-x",
           }}
         >
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
-            <span>Change product</span>
+          <button type="button" className="action-bar-btn" onClick={() => setColorDrawerOpen(true)} style={{ height: 46, padding: "2px 16px 2px 8px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 4, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
+            <img src={`/img/product-images/${selectedColor}-front.png`} width={28} height={28} alt="" style={{ borderRadius: 999, display: "block", objectFit: "cover" }} />
+            <span>Color</span>
+            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" style={{ height: 46, padding: "2px 16px 2px 2px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
-            <img src="/img/preview.png" width={42} height={42} alt="" style={{ borderRadius: 999, display: "block" }} />
+          <button type="button" className="action-bar-btn" style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
+            <img src="/img/preview.png" width={38} height={38} alt="" style={{ borderRadius: 999, display: "block" }} />
             <span>Preview</span>
           </button>
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 120ms" : "none" }}>
+          <button type="button" className="action-bar-btn" style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 120ms" : "none" }}>
+            <img src="/icons/embroidery.png" width={38} height={38} alt="" style={{ borderRadius: 999, display: "block" }} />
             <span>Embroidery</span>
-            <img src="/icons/icon-caret-down.svg" width={16} height={16} alt="" />
+            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 180ms" : "none" }}>
-            <img src="/icons/icon-share.svg" width={18} height={18} alt="" />
-            <span>Share</span>
+          <button type="button" className="action-bar-btn" style={{ height: 46, padding: "0 16px 0px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
+            <img src="/icons/products.png" width={"auto"} height={40} style={{ marginTop: -2 }} alt="" />
+            <span>All products</span>
           </button>
           <div style={{ width: 16, flexShrink: 0 }} />
         </div>
+
+        {/* Right-edge fade hint */}
+        <div style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: 64,
+          background: "linear-gradient(to right, transparent, #e8e8e8)",
+          pointerEvents: "none",
+          opacity: scrollAtEnd ? 0 : 1,
+          transition: "opacity 0.35s ease",
+          zIndex: 1,
+        }} />
 
         {/* Price label above compact button */}
         <span style={{
@@ -631,6 +668,7 @@ export default function App() {
 
         {/* Fixed black button */}
         <button
+          id="action-bar-black-btn"
           ref={blackBtnRef}
           type="button"
           style={{
@@ -665,26 +703,22 @@ export default function App() {
       </div>
 
       {showPopup && (
-        <div id="onboarding-popup" style={{
-          position: "absolute",
-          bottom: 16,
-          left: 16,
-          right: 16,
-          background: "#fff",
-          borderRadius: 20,
-          padding: "24px 20px 20px",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
-          zIndex: 10,
-        }}>
-          <button
-            type="button"
-            onClick={dismissPopup}
-            style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", cursor: "pointer", padding: 4, lineHeight: 1 }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-          <p style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, textAlign: "center", lineHeight: 1.3 }}>
-            <span style={{ background: "var(--cyo-gradient-default, linear-gradient(90deg, var(--Red-600, #DC2626) -0.88%, var(--Blue-700, #4D52D2) 49.94%, var(--Green-600, #16A34A) 101.36%))", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>Start here to customize your product and print.</span>
+        <>
+          <div onClick={dismissPopup} style={{ position: "absolute", inset: 0, zIndex: 9 }} />
+          <div id="onboarding-popup" style={{
+            position: "absolute",
+            bottom: 16,
+            left: 16,
+            right: 16,
+            background: "#fff",
+            borderRadius: 20,
+            padding: "24px 20px 20px",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
+            zIndex: 10,
+            fontFamily: '"MADEOuterSans", sans-serif',
+          }}>
+          <p style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 500, textAlign: "center", lineHeight: 1.3 }}>
+            <span className="onboarding-text-gradient">Start here to customize your product.</span>
           </p>
           <div style={{ display: "flex", gap: 10 }}>
             <button type="button" style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer" }}>
@@ -696,8 +730,43 @@ export default function App() {
               Add design
             </button>
           </div>
-        </div>
+          </div>
+        </>
       )}
+
+      <Drawer.Root open={colorDrawerOpen} onOpenChange={setColorDrawerOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content style={{
+            position: "fixed",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            background: "#fff",
+            borderTopLeftRadius: 16,
+            borderTopRightRadius: 16,
+            padding: "20px 16px 40px",
+            outline: "none",
+            fontFamily: '"Inter Variable", sans-serif',
+          }}>
+            <div style={{ width: 40, height: 4, borderRadius: 999, background: "#e0e0e0", margin: "0 auto 20px" }} />
+            <div style={{
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "center",
+              gap: 8,
+            }}>
+              {COLORS.map(({ key, label }) => (
+                <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, width: "calc(25% - 6px)" }}>
+                  <img src={`/img/product-images/${key}-front.png`} alt={label} style={{ width: "100%", display: "block" }} />
+                  <span style={{ fontSize: 12, color: "#111", textAlign: "center" }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
     </div>
   );
 }
