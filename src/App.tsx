@@ -60,11 +60,13 @@ export default function App() {
 
   const [showPopup, setShowPopup] = useState(true);
   const [animating, setAnimating] = useState(false);
+  const [revealed, setRevealed] = useState(false);
 
   const dismissPopup = () => {
     setShowPopup(false);
     setAnimating(true);
     setTimeout(() => setAnimating(false), 750);
+    requestAnimationFrame(() => requestAnimationFrame(() => setRevealed(true)));
   };
 
   const blackBtnRef = useRef<HTMLButtonElement>(null);
@@ -214,13 +216,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setShowSlideLabel(true);
     setZoom(1);
     setPan({ x: 0, y: 0 });
     imageGesture.current.lastZoom = 1;
     imageGesture.current.lastPan = { x: 0, y: 0 };
-    const timeout = window.setTimeout(() => setShowSlideLabel(false), 900);
-    return () => window.clearTimeout(timeout);
   }, [index]);
 
   useEffect(() => {
@@ -376,6 +375,8 @@ export default function App() {
     setSlideDirection(clampedIndex > activeIndex ? "right" : "left");
     setTargetIndex(clampedIndex);
     setIndex(clampedIndex);
+    setShowSlideLabel(true);
+    window.setTimeout(() => setShowSlideLabel(false), 900);
     setPhase("out");
   };
 
@@ -566,18 +567,18 @@ export default function App() {
             touchAction: "pan-x",
           }}
         >
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
+          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
             <span>Change product</span>
           </button>
-          <button type="button" style={{ height: 46, padding: "2px 16px 2px 2px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
+          <button type="button" style={{ height: 46, padding: "2px 16px 2px 2px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
             <img src="/img/preview.png" width={42} height={42} alt="" style={{ borderRadius: 999, display: "block" }} />
             <span>Preview</span>
           </button>
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 120ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
+          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 120ms" : "none" }}>
             <span>Embroidery</span>
             <img src="/icons/icon-caret-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 180ms both", transform: showPopup ? "translateY(200px)" : undefined }}>
+          <button type="button" style={{ height: 46, padding: "0 16px", borderRadius: 999, border: "none", background: "#E9E9E9", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 180ms" : "none" }}>
             <img src="/icons/icon-share.svg" width={18} height={18} alt="" />
             <span>Share</span>
           </button>
@@ -603,8 +604,9 @@ export default function App() {
         <button
           type="button"
           style={{
-            animation: showPopup ? "none" : "dockBounceRight 0.5s cubic-bezier(0.34,1.56,0.64,1) 400ms both",
-            opacity: showPopup ? 0 : undefined,
+            transform: revealed ? "translateX(0)" : "translateX(20px)",
+            opacity: revealed ? 1 : 0,
+            transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 600ms, opacity 0.3s ease 600ms" : "none",
             position: "absolute",
             right: 16,
             top: -64,
@@ -634,7 +636,6 @@ export default function App() {
           style={{
             position: "absolute",
             left: 16,
-            top: barScrollProgress > 0 ? -56 : 12,
             height: 46,
             padding: barScrollProgress > 0 ? "26px" : "0 16px",
             borderRadius: 999,
@@ -653,9 +654,8 @@ export default function App() {
             boxSizing: "border-box",
             whiteSpace: "nowrap",
             boxShadow: barScrollProgress > 0 ? "0 4px 16px rgba(0,0,0,0.35)" : "none",
-            transition: "box-shadow 0.4s ease, top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)",
-            animation: showPopup ? "none" : "dockBounce 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms both",
-            transform: showPopup ? "translateY(200px)" : undefined,
+            top: revealed ? (barScrollProgress > 0 ? -56 : 12) : 80,
+            transition: revealed ? "box-shadow 0.4s ease, top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)" : "none",
           }}
         >
           <img src="/icons/icon-cart.svg" alt="Cart" style={{ width: 18, height: 18, filter: "invert(1)", flexShrink: 0 }} />
