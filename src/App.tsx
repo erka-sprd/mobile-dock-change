@@ -75,6 +75,7 @@ export default function App() {
   const [scrollAtEnd, setScrollAtEnd] = useState(false);
   const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
   const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [embroideryDataUrl, setEmbroideryDataUrl] = useState<string | null>(null);
   const [embroideryRenderedUrl, setEmbroideryRenderedUrl] = useState<string | null>(null);
   const [designMenuOpen, setDesignMenuOpen] = useState(false);
@@ -733,6 +734,7 @@ export default function App() {
                         boxSizing: "border-box",
                         overflow: "visible",
                         textAlign: "center",
+                        zIndex: isSelected ? 10 : 1,
                       }}
                       onTouchStart={(e) => { e.stopPropagation(); setSelectedDesignId(item.id); }}
                     >
@@ -883,7 +885,7 @@ export default function App() {
             <span>Color</span>
             <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" className="action-bar-btn" onClick={async () => { const url = await flattenDesignItems(); setEmbroideryDataUrl(url || null); setPreviewDrawerOpen(true); }} style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
+          <button type="button" className="action-bar-btn" onClick={async () => { const url = await flattenDesignItems(); setEmbroideryDataUrl(url || null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
             <img src="/img/preview.png" width={38} height={38} alt="" style={{ borderRadius: 999, display: "block" }} />
             <span>Preview</span>
           </button>
@@ -944,7 +946,7 @@ export default function App() {
           }}
         >
           <img src="/icons/icon-cart-plus.svg" alt="Cart" style={{ width: 20, height: 20, filter: "invert(1)", flexShrink: 0 }} />
-          <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute", left: 38 } : {}) }}>17,98 €</span>
+          <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute", left: 38 } : {}) }}>{(17.98 + (designItems.length > 0 ? 6 : 0)).toFixed(2).replace(".", ",") + " €"}</span>
         </button>
 
       </div>
@@ -981,7 +983,7 @@ export default function App() {
                 { icon: "icon-uploads.svg", label: "Uploads" },
                 { icon: "icon-sparkles-ai.svg", label: "AI Design" },
               ].map(({ icon, label }) => (
-                <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                <div key={label} onClick={() => { if (label === "Graphics") { addGraphicItem(); dismissPopup(); } if (label === "Text") { addTextItem(); dismissPopup(); } }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer" }}>
                   <img src={`/icons/${icon}`} width={24} height={24} alt={label} />
                   <span style={{ fontSize: 11, color: "#111", fontWeight: 600, fontFamily: '"Inter Variable", sans-serif' }}>{label}</span>
                 </div>
@@ -994,8 +996,8 @@ export default function App() {
               <span style={{ flex: 1, textAlign: "center" }}>All products</span>
             </button>
             <button type="button" onClick={() => setShowDesignRow(v => !v)} style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer", padding: "4px 16px 4px 4px" }}>
-              <div style={{ width: 40, height: 40, borderRadius: 999, background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <img src="/icons/icon-plus.svg" width={20} height={20} alt="" style={{ filter: "brightness(0) invert(1)" }} />
+              <div style={{ width: 40, height: 40, borderRadius: 999, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <div style={{ width: 24, height: 24, background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)", WebkitMaskImage: "url(/icons/icon-plus.svg)", WebkitMaskSize: "contain", WebkitMaskRepeat: "no-repeat", WebkitMaskPosition: "center", maskImage: "url(/icons/icon-plus.svg)", maskSize: "contain", maskRepeat: "no-repeat", maskPosition: "center" }} />
               </div>
               <span style={{ flex: 1, textAlign: "center" }}>Add design</span>
             </button>
@@ -1052,33 +1054,43 @@ export default function App() {
             <div style={{ background: "#FEFCE8", padding: "10px 16px", margin: 12, display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 14, color: "#854D0E", lineHeight: 1.4 }}>We can stitch your design a bit smaller, like in the previews</span>
             </div>
-            <div style={{ display: "flex", gap: 12, marginBottom: 20, overflowX: "auto", paddingLeft: 16, paddingRight: 16, scrollbarWidth: "none" }}>
-              {/* 1 — embroidery preview */}
-              <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#e8e8e8", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <img src={`/img/product-images/${selectedColor}-front.png`} alt="" style={{ position: "absolute", top: "50%", left: "50%", width: "100%", height: "100%", objectFit: "contain", transform: "translate(-50%, -50%) scale(6)", transformOrigin: "center center", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                {embroideryDataUrl
-                  ? <EmbroideryPreview src={embroideryDataUrl} maxSize={500} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", position: "relative" }} onRendered={setEmbroideryRenderedUrl} />
-                  : <span style={{ fontSize: 12, color: "#aaa", position: "relative" }}>Add a design to preview</span>
-                }
-              </div>
-              {/* 2 — model front */}
-              <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
-                <img src="/img/preview-images/softEcru-model-front.png" alt="Model Front" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                {embroideryRenderedUrl && (
-                  <div style={{ position: "absolute", top: "35%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
-                    <img src={embroideryRenderedUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+            <div style={{ display: "flex", gap: 12, marginBottom: 20, overflowX: previewLoading ? "hidden" : "auto", paddingLeft: 16, paddingRight: 16, scrollbarWidth: "none" }}>
+              {previewLoading ? (
+                <>
+                  {[0, 1, 2].map(i => (
+                    <div key={i} style={{ flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "linear-gradient(90deg, #ebebeb 25%, #d6d6d6 50%, #ebebeb 75%)", backgroundSize: "200% 100%", animation: "skeletonShimmer 1.4s ease infinite" }} />
+                  ))}
+                </>
+              ) : (
+                <>
+                  {/* 1 — embroidery preview */}
+                  <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#e8e8e8", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <img src={`/img/product-images/${selectedColor}-front.png`} alt="" style={{ position: "absolute", top: "50%", left: "50%", width: "100%", height: "100%", objectFit: "contain", transform: "translate(-50%, -50%) scale(6)", transformOrigin: "center center", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                    {embroideryDataUrl
+                      ? <EmbroideryPreview src={embroideryDataUrl} maxSize={500} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", position: "relative" }} onRendered={setEmbroideryRenderedUrl} />
+                      : <span style={{ fontSize: 14, color: "#000", position: "relative" }}>You'll preview embroidery here.</span>
+                    }
                   </div>
-                )}
-              </div>
-              {/* 3 — flatlay */}
-              <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
-                <img src="/img/preview-images/softEcru-flatlay.png" alt="Flatlay" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                {embroideryRenderedUrl && (
-                  <div style={{ position: "absolute", top: "18%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
-                    <img src={embroideryRenderedUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                  {/* 2 — model front */}
+                  <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
+                    <img src="/img/preview-images/softEcru-model-front.png" alt="Model Front" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                    {embroideryRenderedUrl && (
+                      <div style={{ position: "absolute", top: "35%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
+                        <img src={embroideryRenderedUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                  {/* 3 — flatlay */}
+                  <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
+                    <img src="/img/preview-images/softEcru-flatlay.png" alt="Flatlay" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                    {embroideryRenderedUrl && (
+                      <div style={{ position: "absolute", top: "18%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
+                        <img src={embroideryRenderedUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </Drawer.Content>
         </Drawer.Portal>

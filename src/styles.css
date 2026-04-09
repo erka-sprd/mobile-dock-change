@@ -28,6 +28,11 @@
   text-align: center;
 }
 
+@keyframes skeletonShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .action-bar-btn:active {
   background: #ededed !important;
   transition: background 0.05s ease !important;
