@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Drawer } from "vaul";
+import EmbroideryPreview from "./EmbroideryPreview";
 
 const BAR_BTN_INITIAL = 130;
 
@@ -73,9 +74,12 @@ export default function App() {
   const [barScrollProgress, setBarScrollProgress] = useState(0);
   const [scrollAtEnd, setScrollAtEnd] = useState(false);
   const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
+  const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
+  const [embroideryDataUrl, setEmbroideryDataUrl] = useState<string | null>(null);
+  const [embroideryRenderedUrl, setEmbroideryRenderedUrl] = useState<string | null>(null);
   const [designMenuOpen, setDesignMenuOpen] = useState(false);
   const [designItems, setDesignItems] = useState<Array<{
-    id: string; content: string; x: number; y: number; w: number; fontSize: number;
+    id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number;
   }>>([]);
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [designGestureActive, setDesignGestureActive] = useState(false);
@@ -100,6 +104,7 @@ export default function App() {
   const isAnimatingRef = useRef(false);
   const currentPARef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
   const itemSizeRefs = useRef<Map<string, { w: number; h: number }>>(new Map());
+  const itemElRefs = useRef<Map<string, HTMLElement>>(new Map());
   const designGestureRef = useRef<
     | { type: "idle" }
     | { type: "move" | "resize-tl" | "resize-tr" | "resize-bl" | "resize-br"; itemId: string; startTx: number; startTy: number; startX: number; startY: number; startW: number; startFontSize: number; }
@@ -434,18 +439,121 @@ export default function App() {
   const addTextItem = () => {
     const pa = currentPARef.current;
     if (!pa) return;
-    const fontSize = 28;
-    const w = pa.width * 0.75;
     const id = `text-${Date.now()}`;
     setDesignItems(prev => [...prev, {
-      id, content: "Text",
-      x: (pa.width - w) / 2,
-      y: pa.height * 0.4,
-      w, fontSize,
+      id, type: "text" as const, content: "Team\nGreen",
+      x: pa.width / 2, y: pa.height * 0.08,
+      w: 0, fontSize: 28,
     }]);
     setSelectedDesignId(id);
     setDesignMenuOpen(false);
   };
+
+  const addGraphicItem = () => {
+    const pa = currentPARef.current;
+    if (!pa) return;
+    const size = Math.min(pa.width, pa.height) * 0.5;
+    const id = `img-${Date.now()}`;
+    setDesignItems(prev => [...prev, {
+      id, type: "image" as const, content: "", src: "/img/graphics/croco.png",
+      x: pa.width / 2, y: pa.height / 2,
+      w: size, fontSize: 0,
+    }]);
+    setSelectedDesignId(id);
+    setDesignMenuOpen(false);
+  };
+
+  const flattenDesignItems = (): Promise<string> => {
+    return new Promise((resolve) => {
+      const pa = currentPARef.current;
+      if (!pa || designItems.length === 0) { resolve(""); return; }
+
+      const SCALE = 3;
+      const PAD = 20;
+
+      // Compute bounding box from item positions
+      const mctx = document.createElement("canvas").getContext("2d")!;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const item of designItems) {
+        if (item.type === "image") {
+          minX = Math.min(minX, item.x - item.w / 2);
+          minY = Math.min(minY, item.y - item.w / 2);
+          maxX = Math.max(maxX, item.x + item.w / 2);
+          maxY = Math.max(maxY, item.y + item.w / 2);
+        } else if (item.type === "text") {
+          mctx.font = `400 ${item.fontSize}px "CarterOne", cursive`;
+          const lines = item.content.split("\n");
+          const lineH = item.fontSize * 0.9;
+          const halfW = Math.max(...lines.map(l => mctx.measureText(l).width)) / 2;
+          minX = Math.min(minX, item.x - halfW);
+          minY = Math.min(minY, item.y);
+          maxX = Math.max(maxX, item.x + halfW);
+          maxY = Math.max(maxY, item.y + lines.length * lineH);
+        }
+      }
+
+      if (!isFinite(minX)) { resolve(""); return; }
+
+      minX = Math.max(0, minX - PAD);
+      minY = Math.max(0, minY - PAD);
+      maxX = Math.min(pa.width, maxX + PAD);
+      maxY = Math.min(pa.height, maxY + PAD);
+
+      const cropW = maxX - minX;
+      const cropH = maxY - minY;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(cropW * SCALE);
+      canvas.height = Math.round(cropH * SCALE);
+      const ctx = canvas.getContext("2d")!;
+      ctx.scale(SCALE, SCALE);
+      ctx.translate(-minX, -minY);
+
+      const renderNext = (index: number) => {
+        if (index >= designItems.length) {
+          resolve(canvas.toDataURL("image/png"));
+          return;
+        }
+        const item = designItems[index];
+        if (item.type === "image" && item.src) {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = () => {
+            ctx.drawImage(img, item.x - item.w / 2, item.y - item.w / 2, item.w, item.w);
+            renderNext(index + 1);
+          };
+          img.onerror = () => renderNext(index + 1);
+          img.src = item.src;
+        } else if (item.type === "text") {
+          ctx.save();
+          ctx.font = `400 ${item.fontSize}px "CarterOne", cursive`;
+          ctx.fillStyle = "#7A8949";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "top";
+          const lines = item.content.split("\n");
+          lines.forEach((line, i) => {
+            ctx.fillText(line, item.x, item.y + i * item.fontSize * 0.9);
+          });
+          ctx.restore();
+          renderNext(index + 1);
+        } else {
+          renderNext(index + 1);
+        }
+      };
+      renderNext(0);
+    });
+  };
+
+  useEffect(() => {
+    if (!selectedDesignId) return;
+    const handler = (e: TouchEvent) => {
+      const el = itemElRefs.current.get(selectedDesignId);
+      if (el && el.contains(e.target as Node)) return;
+      setSelectedDesignId(null);
+    };
+    document.addEventListener("touchstart", handler, { passive: true });
+    return () => document.removeEventListener("touchstart", handler);
+  }, [selectedDesignId]);
 
   const handleDesignMove = (e: React.TouchEvent<HTMLDivElement>) => {
     const g = designGestureRef.current;
@@ -607,48 +715,44 @@ export default function App() {
               }}>
                 {designItems.map(item => {
                   const isSelected = item.id === selectedDesignId;
-                  const H = 8;
+                  // const H = 8; // handle size — re-enable with corner handles
                   return (
                     <div
                       key={item.id}
-                      ref={(el) => { if (el) itemSizeRefs.current.set(item.id, { w: el.offsetWidth, h: el.offsetHeight }); }}
+                      ref={(el) => { if (el) { itemSizeRefs.current.set(item.id, { w: el.offsetWidth, h: el.offsetHeight }); itemElRefs.current.set(item.id, el); } }}
                       style={{
                         position: "absolute",
                         left: currentPA.left + item.x,
                         top: currentPA.top + item.y,
                         width: "fit-content",
+                        transform: item.type === "image" ? "translate(-50%, -50%)" : "translateX(-50%)",
                         pointerEvents: "all",
                         touchAction: "none",
                         outline: isSelected ? `${1.5 / zoom}px solid #4D52D2` : `${1.5 / zoom}px solid transparent`,
-                        borderRadius: 4,
+                        borderRadius: 0,
                         boxSizing: "border-box",
                         overflow: "visible",
+                        textAlign: "center",
                       }}
-                      onTouchStart={(e) => {
-                        e.stopPropagation();
-                        setSelectedDesignId(item.id);
-                        const measured0 = itemSizeRefs.current.get(item.id);
-                        designGestureRef.current = {
-                          type: "move", itemId: item.id,
-                          startTx: e.touches[0].clientX, startTy: e.touches[0].clientY,
-                          startX: item.x, startY: item.y,
-                          startW: measured0?.w ?? item.fontSize * 3,
-                          startFontSize: item.fontSize,
-                        };
-                        setDesignGestureActive(true);
-                      }}
+                      onTouchStart={(e) => { e.stopPropagation(); setSelectedDesignId(item.id); }}
                     >
-                      <span style={{
-                        display: "block",
-                        fontSize: item.fontSize,
-                        fontWeight: 700,
-                        color: "#111",
-                        lineHeight: 1.2,
-                        wordBreak: "break-word",
-                        userSelect: "none",
-                        WebkitUserSelect: "none",
-                        padding: "2px 4px",
-                      }}>{item.content}</span>
+                      {item.type === "image" ? (
+                        <img src={item.src} alt="" draggable={false} style={{ display: "block", width: item.w, height: item.w, objectFit: "contain", userSelect: "none", WebkitUserSelect: "none" }} />
+                      ) : (
+                        <span style={{
+                          display: "block",
+                          fontSize: item.fontSize,
+                          fontFamily: '"CarterOne", cursive',
+                          fontWeight: 400,
+                          color: "#3F920C",
+                          lineHeight: 0.9,
+                          whiteSpace: "pre-line",
+                          userSelect: "none",
+                          WebkitUserSelect: "none",
+                          padding: "2px 4px",
+                          textAlign: "center",
+                        }}>{item.content}</span>
+                      )}
                       {isSelected && (
                         <div
                           style={{
@@ -672,58 +776,33 @@ export default function App() {
                           <img src="/icons/icon-trash.svg" width={16} height={16} alt="Delete" style={{ opacity: 0.6 }} />
                         </div>
                       )}
+                      {/* Corner resize handles — disabled, restore by uncommenting:
                       {isSelected && ["tl", "tr", "bl", "br"].map(corner => {
                         const gtype = `resize-${corner}` as "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
-                        const TAP = 40;
-                        const offset = -(TAP / 2);
+                        const TAP = 40; const offset = -(TAP / 2);
                         const tapPos: React.CSSProperties = corner === "tl" ? { top: offset, left: offset }
                           : corner === "tr" ? { top: offset, right: offset }
                           : corner === "bl" ? { bottom: offset, left: offset }
                           : { bottom: offset, right: offset };
                         return (
-                          <div key={corner} style={{
-                            position: "absolute", width: TAP, height: TAP,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            touchAction: "none", zIndex: 1,
-                            transform: `scale(${1 / zoom})`,
-                            ...tapPos,
-                          }}
+                          <div key={corner} style={{ position: "absolute", width: TAP, height: TAP, display: "flex", alignItems: "center", justifyContent: "center", touchAction: "none", zIndex: 1, transform: `scale(${1 / zoom})`, ...tapPos }}
                             onTouchStart={(e) => {
                               e.stopPropagation();
                               const measured1 = itemSizeRefs.current.get(item.id);
-                              designGestureRef.current = {
-                                type: gtype, itemId: item.id,
-                                startTx: e.touches[0].clientX, startTy: e.touches[0].clientY,
-                                startX: item.x, startY: item.y,
-                                startW: measured1?.w ?? item.fontSize * 3,
-                                startFontSize: item.fontSize,
-                              };
+                              designGestureRef.current = { type: gtype, itemId: item.id, startTx: e.touches[0].clientX, startTy: e.touches[0].clientY, startX: item.x, startY: item.y, startW: measured1?.w ?? item.fontSize * 3, startFontSize: item.fontSize };
                               setDesignGestureActive(true);
                             }}
                           >
-                            <div style={{
-                              width: H, height: H, borderRadius: 999,
-                              background: "#fff", border: "2px solid #4D52D2",
-                              flexShrink: 0,
-                            }} />
+                            <div style={{ width: H, height: H, borderRadius: 999, background: "#fff", border: "2px solid #4D52D2", flexShrink: 0 }} />
                           </div>
                         );
                       })}
+                      */}
                     </div>
                   );
                 })}
               </div>
             </>
-          )}
-
-          {/* Tap-to-deselect overlay */}
-          {selectedDesignId && (
-            <div
-              style={{ position: "absolute", inset: 0, zIndex: 4, touchAction: "none" }}
-              onTouchStart={(e) => { e.stopPropagation(); setSelectedDesignId(null); }}
-              onTouchMove={(e) => { e.stopPropagation(); e.preventDefault(); }}
-              onTouchEnd={(e) => { e.stopPropagation(); }}
-            />
           )}
 
           {/* Gesture capture during drag/resize */}
@@ -804,7 +883,7 @@ export default function App() {
             <span>Color</span>
             <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" className="action-bar-btn" style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
+          <button type="button" className="action-bar-btn" onClick={async () => { const url = await flattenDesignItems(); setEmbroideryDataUrl(url || null); setPreviewDrawerOpen(true); }} style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
             <img src="/img/preview.png" width={38} height={38} alt="" style={{ borderRadius: 999, display: "block" }} />
             <span>Preview</span>
           </button>
@@ -833,21 +912,6 @@ export default function App() {
           transition: "opacity 0.35s ease",
           zIndex: 1,
         }} />
-
-        {/* Price label above compact button */}
-        <span style={{
-          position: "absolute",
-          left: 18,
-          top: 12,
-          transform: "translateY(calc(-100% - 74px))",
-          fontSize: 14,
-          fontWeight: 700,
-          color: "black",
-          opacity: barScrollProgress > 0 ? 1 : 0,
-          transition: "opacity 0.25s ease-in-out",
-          pointerEvents: "none",
-          whiteSpace: "nowrap",
-        }}>17,98 €</span>
 
         {/* Fixed black button */}
         <button
@@ -879,7 +943,7 @@ export default function App() {
             transition: revealed ? "box-shadow 0.4s ease, top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)" : "none",
           }}
         >
-          <img src="/icons/icon-cart.svg" alt="Cart" style={{ width: 18, height: 18, filter: "invert(1)", flexShrink: 0 }} />
+          <img src="/icons/icon-cart-plus.svg" alt="Cart" style={{ width: 20, height: 20, filter: "invert(1)", flexShrink: 0 }} />
           <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute", left: 38 } : {}) }}>17,98 €</span>
         </button>
 
@@ -887,7 +951,7 @@ export default function App() {
 
       {showPopup && (
         <>
-          <div onClick={dismissPopup} style={{ position: "absolute", inset: 0, zIndex: 11, backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)" }} />
+          <div onTouchStart={dismissPopup} onClick={dismissPopup} style={{ position: "absolute", inset: 0, zIndex: 11, backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", touchAction: "none", cursor: "pointer" }} />
           <div id="onboarding-popup" style={{
             position: "absolute",
             bottom: 16,
@@ -976,6 +1040,50 @@ export default function App() {
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
+
+      <Drawer.Root open={previewDrawerOpen} onOpenChange={setPreviewDrawerOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 20, paddingBottom: 40, outline: "none", fontFamily: '"Inter Variable", sans-serif' }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, paddingLeft: 16, paddingRight: 16 }}>
+              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Preview</span>
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setPreviewDrawerOpen(false)} />
+            </div>
+            <div style={{ background: "#FEFCE8", padding: "10px 16px", margin: 12, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 14, color: "#854D0E", lineHeight: 1.4 }}>We can stitch your design a bit smaller, like in the previews</span>
+            </div>
+            <div style={{ display: "flex", gap: 12, marginBottom: 20, overflowX: "auto", paddingLeft: 16, paddingRight: 16, scrollbarWidth: "none" }}>
+              {/* 1 — embroidery preview */}
+              <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#e8e8e8", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <img src={`/img/product-images/${selectedColor}-front.png`} alt="" style={{ position: "absolute", top: "50%", left: "50%", width: "100%", height: "100%", objectFit: "contain", transform: "translate(-50%, -50%) scale(6)", transformOrigin: "center center", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                {embroideryDataUrl
+                  ? <EmbroideryPreview src={embroideryDataUrl} maxSize={500} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", position: "relative" }} onRendered={setEmbroideryRenderedUrl} />
+                  : <span style={{ fontSize: 12, color: "#aaa", position: "relative" }}>Add a design to preview</span>
+                }
+              </div>
+              {/* 2 — model front */}
+              <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
+                <img src="/img/preview-images/softEcru-model-front.png" alt="Model Front" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                {embroideryRenderedUrl && (
+                  <div style={{ position: "absolute", top: "35%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
+                    <img src={embroideryRenderedUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                  </div>
+                )}
+              </div>
+              {/* 3 — flatlay */}
+              <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
+                <img src="/img/preview-images/softEcru-flatlay.png" alt="Flatlay" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                {embroideryRenderedUrl && (
+                  <div style={{ position: "absolute", top: "18%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
+                    <img src={embroideryRenderedUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+
       </div>{/* end blur wrapper */}
 
       {/* Overlay — click catcher only, no blur (blur is on the wrapper above) */}
@@ -1003,12 +1111,12 @@ export default function App() {
           { icon: "icon-uploads.svg", label: "Uploads" },
           { icon: "icon-sparkles-ai.svg", label: "AI Design" },
         ].map(({ icon, label }, i) => (
-          <div key={label} onClick={() => { if (label === "Text") addTextItem(); }} style={{
+          <div key={label} onClick={() => { if (label === "Text") addTextItem(); if (label === "Graphics") addGraphicItem(); }} style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
             height: 46,
-            background: "#fff",
+            background: "#ffffff",
             borderRadius: 999,
             padding: "2px 16px 2px 12px",
             boxShadow: "0 1px 5px rgba(0,0,0,0.08)",
@@ -1043,7 +1151,7 @@ export default function App() {
         >
           <svg
             width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
-            style={{ transform: designMenuOpen ? "rotate(315deg)" : "rotate(0deg)", transition: "transform 0.8s cubic-bezier(0.34,1.4,0.64,1)" }}
+            style={{ transform: designMenuOpen ? "rotate(225deg)" : "rotate(0deg)", transition: "transform 0.4s cubic-bezier(0.34,1.4,0.64,1)" }}
           >
             <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
           </svg>
