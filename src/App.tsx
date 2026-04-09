@@ -73,6 +73,7 @@ export default function App() {
   const [barScrollProgress, setBarScrollProgress] = useState(0);
   const [scrollAtEnd, setScrollAtEnd] = useState(false);
   const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
+  const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
 
   const [showPopup, setShowPopup] = useState(true);
   const [animating, setAnimating] = useState(false);
@@ -592,7 +593,7 @@ export default function App() {
             <span>Color</span>
             <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" className="action-bar-btn" style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
+          <button type="button" className="action-bar-btn" onClick={() => setPreviewDrawerOpen(true)} style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
             <img src="/img/preview.png" width={38} height={38} alt="" style={{ borderRadius: 999, display: "block" }} />
             <span>Preview</span>
           </button>
@@ -764,6 +765,31 @@ export default function App() {
                 </div>
               ))}
             </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+
+      <Drawer.Root open={previewDrawerOpen} onOpenChange={setPreviewDrawerOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content style={{
+            position: "fixed",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            background: "#fff",
+            borderTopLeftRadius: 16,
+            borderTopRightRadius: 16,
+            padding: "20px 16px 40px",
+            outline: "none",
+            fontFamily: '"Inter Variable", sans-serif',
+          }}>
+            <div style={{ width: 40, height: 4, borderRadius: 999, background: "#e0e0e0", margin: "0 auto 20px" }} />
+            <h2 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 600, textAlign: "center" }}>Preview</h2>
+            <p style={{ margin: 0, fontSize: 14, color: "#666", textAlign: "center" }}>
+              This is a simple preview drawer. Add your preview content here.
+            </p>
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
