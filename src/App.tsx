@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Drawer } from "vaul";
 
 const BAR_BTN_INITIAL = 130;
@@ -73,8 +73,15 @@ export default function App() {
   const [barScrollProgress, setBarScrollProgress] = useState(0);
   const [scrollAtEnd, setScrollAtEnd] = useState(false);
   const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
+  const [designMenuOpen, setDesignMenuOpen] = useState(false);
+  const [designItems, setDesignItems] = useState<Array<{
+    id: string; content: string; x: number; y: number; w: number; fontSize: number;
+  }>>([]);
+  const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
+  const [designGestureActive, setDesignGestureActive] = useState(false);
 
   const [showPopup, setShowPopup] = useState(true);
+  const [showDesignRow, setShowDesignRow] = useState(false);
   const [animating, setAnimating] = useState(false);
   const [revealed, setRevealed] = useState(false);
 
@@ -91,6 +98,12 @@ export default function App() {
   const blackBtnCurrentWidth = useRef<number | null>(null);
   const isCompactRef = useRef(false);
   const isAnimatingRef = useRef(false);
+  const currentPARef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+  const itemSizeRefs = useRef<Map<string, { w: number; h: number }>>(new Map());
+  const designGestureRef = useRef<
+    | { type: "idle" }
+    | { type: "move" | "resize-tl" | "resize-tr" | "resize-bl" | "resize-br"; itemId: string; startTx: number; startTy: number; startX: number; startY: number; startW: number; startFontSize: number; }
+  >({ type: "idle" });
 
   const COMPACT_WIDTH = 46;
   const ANIM_DURATION = 500;
@@ -318,6 +331,7 @@ export default function App() {
   };
 
   const onEditorTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (selectedDesignId) return;
     if (e.touches.length === 2) {
       if (zoom <= 1) setPan({ x: 0, y: 0 });
       imageGesture.current = {
@@ -397,6 +411,73 @@ export default function App() {
     setPhase("out");
   };
 
+  const currentPA = useMemo(() => {
+    if (editorSize.width === 0) return null;
+    const label = getSlidesForColor(selectedColor)[activeIndex]?.label;
+    const area = label === "Front" ? FRONT_PRINT_AREA
+      : label === "Back" ? BACK_PRINT_AREA
+      : label === "Left Arm" ? LEFT_ARM_PRINT_AREA
+      : label === "Right Arm" ? RIGHT_ARM_PRINT_AREA
+      : null;
+    if (!area) return null;
+    const rect = getContainRect(editorSize.width, editorSize.height, imageNaturalSize.width, imageNaturalSize.height);
+    return {
+      left: rect.left + rect.width * area.x,
+      top: rect.top + rect.height * area.y,
+      width: rect.width * area.w,
+      height: rect.height * area.h,
+    };
+  }, [editorSize, activeIndex, imageNaturalSize, selectedColor]);
+
+  useEffect(() => { currentPARef.current = currentPA; }, [currentPA]);
+
+  const addTextItem = () => {
+    const pa = currentPARef.current;
+    if (!pa) return;
+    const fontSize = 28;
+    const w = pa.width * 0.75;
+    const id = `text-${Date.now()}`;
+    setDesignItems(prev => [...prev, {
+      id, content: "Text",
+      x: (pa.width - w) / 2,
+      y: pa.height * 0.4,
+      w, fontSize,
+    }]);
+    setSelectedDesignId(id);
+    setDesignMenuOpen(false);
+  };
+
+  const handleDesignMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const g = designGestureRef.current;
+    if (g.type === "idle") return;
+    e.preventDefault();
+    const dx = (e.touches[0].clientX - g.startTx) / zoom;
+    const dy = (e.touches[0].clientY - g.startTy) / zoom;
+    const pa = currentPARef.current;
+    if (!pa) return;
+    setDesignItems(items => items.map(item => {
+      if (item.id !== g.itemId) return item;
+      const measured = itemSizeRefs.current.get(item.id);
+      const itemW = measured?.w ?? g.startW;
+      const itemH = measured?.h ?? item.fontSize * 1.5;
+      if (g.type === "move") {
+        return {
+          ...item,
+          x: Math.max(0, Math.min(pa.width - itemW, g.startX + dx)),
+          y: Math.max(0, Math.min(pa.height - itemH, g.startY + dy)),
+        };
+      }
+      const signedDx = (g.type === "resize-bl" || g.type === "resize-tl") ? -dx : dx;
+      const newFontSize = Math.max(10, g.startFontSize * (1 + signedDx / Math.max(40, g.startW)));
+      return { ...item, fontSize: newFontSize };
+    }));
+  };
+
+  const handleDesignEnd = () => {
+    designGestureRef.current = { type: "idle" };
+    setDesignGestureActive(false);
+  };
+
   return (
     <div
       style={{
@@ -412,6 +493,8 @@ export default function App() {
         touchAction: "manipulation",
       }}
     >
+      {/* Page content — blurred when design menu is open */}
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden", filter: designMenuOpen ? "blur(2px)" : "none", transition: "filter 0.2s ease", pointerEvents: designMenuOpen ? "none" : "all" }}>
       {/* Orange banner */}
       <div style={{ background: "#E8502A", color: "#fff", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, height: 36, flexShrink: 0 }}>
         Winter Sale 20%
@@ -496,32 +579,161 @@ export default function App() {
             );
           })}
 
-          {/* Print area overlay */}
-          {editorSize.width > 0 && (() => {
-            const label = slides[activeIndex].label;
-            const area = label === "Front" ? FRONT_PRINT_AREA : label === "Back" ? BACK_PRINT_AREA : label === "Left Arm" ? LEFT_ARM_PRINT_AREA : label === "Right Arm" ? RIGHT_ARM_PRINT_AREA : null;
-            if (!area) return null;
-            const rect = getContainRect(editorSize.width, editorSize.height, imageNaturalSize.width, imageNaturalSize.height);
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  left: rect.left + rect.width * area.x,
-                  top: rect.top + rect.height * area.y,
-                  width: rect.width * area.w,
-                  height: rect.height * area.h,
-                  border: "1.5px dashed rgba(0,0,0,0.35)",
-                  borderRadius: 4,
-                  pointerEvents: "none",
-                  zIndex: 5,
-                  opacity: phase === "out" ? 0 : 1,
-                  transition: "opacity 100ms ease-in-out",
-                  transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
-                  transformOrigin: `${editorSize.width / 2 - (rect.left + rect.width * area.x)}px ${editorSize.height / 2 - (rect.top + rect.height * area.y)}px`,
-                }}
-              />
-            );
-          })()}
+          {/* Print area border + design items */}
+          {currentPA && (
+            <>
+              <div style={{
+                position: "absolute",
+                left: currentPA.left, top: currentPA.top,
+                width: currentPA.width, height: currentPA.height,
+                border: "1.5px dashed rgba(0,0,0,0.35)",
+                borderRadius: 4,
+                pointerEvents: "none",
+                zIndex: 5,
+                opacity: phase === "out" ? 0 : 1,
+                transition: "opacity 100ms ease-in-out",
+                transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
+                transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${editorSize.height / 2 - currentPA.top}px`,
+              }} />
+
+              {/* Design items — same transform as print area so they zoom/pan in sync and stay locked to their position */}
+              <div style={{
+                position: "absolute",
+                left: 0, top: 0, width: "100%", height: "100%",
+                pointerEvents: "none",
+                transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
+                transformOrigin: `${editorSize.width / 2}px ${editorSize.height / 2}px`,
+                zIndex: 6,
+              }}>
+                {designItems.map(item => {
+                  const isSelected = item.id === selectedDesignId;
+                  const H = 8;
+                  return (
+                    <div
+                      key={item.id}
+                      ref={(el) => { if (el) itemSizeRefs.current.set(item.id, { w: el.offsetWidth, h: el.offsetHeight }); }}
+                      style={{
+                        position: "absolute",
+                        left: currentPA.left + item.x,
+                        top: currentPA.top + item.y,
+                        width: "fit-content",
+                        pointerEvents: "all",
+                        touchAction: "none",
+                        outline: isSelected ? `${1.5 / zoom}px solid #4D52D2` : `${1.5 / zoom}px solid transparent`,
+                        borderRadius: 4,
+                        boxSizing: "border-box",
+                        overflow: "visible",
+                      }}
+                      onTouchStart={(e) => {
+                        e.stopPropagation();
+                        setSelectedDesignId(item.id);
+                        const measured0 = itemSizeRefs.current.get(item.id);
+                        designGestureRef.current = {
+                          type: "move", itemId: item.id,
+                          startTx: e.touches[0].clientX, startTy: e.touches[0].clientY,
+                          startX: item.x, startY: item.y,
+                          startW: measured0?.w ?? item.fontSize * 3,
+                          startFontSize: item.fontSize,
+                        };
+                        setDesignGestureActive(true);
+                      }}
+                    >
+                      <span style={{
+                        display: "block",
+                        fontSize: item.fontSize,
+                        fontWeight: 700,
+                        color: "#111",
+                        lineHeight: 1.2,
+                        wordBreak: "break-word",
+                        userSelect: "none",
+                        WebkitUserSelect: "none",
+                        padding: "2px 4px",
+                      }}>{item.content}</span>
+                      {isSelected && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: -(32 + 8) / zoom,
+                            left: "50%",
+                            transform: `translateX(-50%) scale(${1 / zoom})`,
+                            transformOrigin: "center bottom",
+                            width: 32, height: 32, borderRadius: 999,
+                            background: "#fff",
+                            boxShadow: "0 1px 6px rgba(0,0,0,0.18)",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            touchAction: "none", zIndex: 2, cursor: "pointer",
+                          }}
+                          onTouchEnd={(e) => {
+                            e.stopPropagation();
+                            setDesignItems(prev => prev.filter(d => d.id !== item.id));
+                            setSelectedDesignId(null);
+                          }}
+                        >
+                          <img src="/icons/icon-trash.svg" width={16} height={16} alt="Delete" style={{ opacity: 0.6 }} />
+                        </div>
+                      )}
+                      {isSelected && ["tl", "tr", "bl", "br"].map(corner => {
+                        const gtype = `resize-${corner}` as "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
+                        const TAP = 40;
+                        const offset = -(TAP / 2);
+                        const tapPos: React.CSSProperties = corner === "tl" ? { top: offset, left: offset }
+                          : corner === "tr" ? { top: offset, right: offset }
+                          : corner === "bl" ? { bottom: offset, left: offset }
+                          : { bottom: offset, right: offset };
+                        return (
+                          <div key={corner} style={{
+                            position: "absolute", width: TAP, height: TAP,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            touchAction: "none", zIndex: 1,
+                            transform: `scale(${1 / zoom})`,
+                            ...tapPos,
+                          }}
+                            onTouchStart={(e) => {
+                              e.stopPropagation();
+                              const measured1 = itemSizeRefs.current.get(item.id);
+                              designGestureRef.current = {
+                                type: gtype, itemId: item.id,
+                                startTx: e.touches[0].clientX, startTy: e.touches[0].clientY,
+                                startX: item.x, startY: item.y,
+                                startW: measured1?.w ?? item.fontSize * 3,
+                                startFontSize: item.fontSize,
+                              };
+                              setDesignGestureActive(true);
+                            }}
+                          >
+                            <div style={{
+                              width: H, height: H, borderRadius: 999,
+                              background: "#fff", border: "2px solid #4D52D2",
+                              flexShrink: 0,
+                            }} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Tap-to-deselect overlay */}
+          {selectedDesignId && (
+            <div
+              style={{ position: "absolute", inset: 0, zIndex: 4, touchAction: "none" }}
+              onTouchStart={(e) => { e.stopPropagation(); setSelectedDesignId(null); }}
+              onTouchMove={(e) => { e.stopPropagation(); e.preventDefault(); }}
+              onTouchEnd={(e) => { e.stopPropagation(); }}
+            />
+          )}
+
+          {/* Gesture capture during drag/resize */}
+          {designGestureActive && (
+            <div
+              style={{ position: "absolute", inset: 0, zIndex: 15, touchAction: "none" }}
+              onTouchMove={handleDesignMove}
+              onTouchEnd={handleDesignEnd}
+            />
+          )}
         </div>
 
         {/* Product view indicators */}
@@ -637,35 +849,6 @@ export default function App() {
           whiteSpace: "nowrap",
         }}>17,98 €</span>
 
-        {/* Gradient plus button */}
-        <button
-          type="button"
-          style={{
-            transform: revealed ? "translateX(0)" : "translateX(20px)",
-            opacity: revealed ? 1 : 0,
-            transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 600ms, opacity 0.3s ease 600ms" : "none",
-            position: "absolute",
-            right: 16,
-            top: -64,
-            width: 56,
-            height: 56,
-            borderRadius: 999,
-            border: "none",
-            background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
-            boxShadow: "0 4px 14px 0 rgba(0, 0, 0, 0.25)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            flexShrink: 0,
-            zIndex: 3,
-          }}
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-          </svg>
-        </button>
-
         {/* Fixed black button */}
         <button
           id="action-bar-black-btn"
@@ -704,7 +887,7 @@ export default function App() {
 
       {showPopup && (
         <>
-          <div onClick={dismissPopup} style={{ position: "absolute", inset: 0, zIndex: 9 }} />
+          <div onClick={dismissPopup} style={{ position: "absolute", inset: 0, zIndex: 11, backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)" }} />
           <div id="onboarding-popup" style={{
             position: "absolute",
             bottom: 16,
@@ -714,20 +897,43 @@ export default function App() {
             borderRadius: 20,
             padding: "24px 20px 20px",
             boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
-            zIndex: 10,
+            zIndex: 12,
             fontFamily: '"MADEOuterSans", sans-serif',
           }}>
           <p style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 500, textAlign: "center", lineHeight: 1.3 }}>
             <span className="onboarding-text-gradient">Start here to customize your product.</span>
           </p>
+          <div style={{
+            overflow: "hidden",
+            maxHeight: showDesignRow ? 100 : 0,
+            opacity: showDesignRow ? 1 : 0,
+            marginBottom: showDesignRow ? 10 : 0,
+            transition: "max-height 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.25s ease, margin-bottom 0.35s ease",
+          }}>
+            <div style={{ background: "#f0f0f0", borderRadius: 16, padding: "12px 8px", display: "flex", justifyContent: "space-around" }}>
+              {[
+                { icon: "icon-graphics.svg", label: "Graphics" },
+                { icon: "icon-text.svg", label: "Text" },
+                { icon: "icon-uploads.svg", label: "Uploads" },
+                { icon: "icon-sparkles-ai.svg", label: "AI Design" },
+              ].map(({ icon, label }) => (
+                <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                  <img src={`/icons/${icon}`} width={24} height={24} alt={label} />
+                  <span style={{ fontSize: 11, color: "#111", fontWeight: 600, fontFamily: '"Inter Variable", sans-serif' }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 10 }}>
-            <button type="button" style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer" }}>
-              <img src="/icons/icon-tag.svg" width={20} height={20} alt="" />
-              All products
+            <button type="button" style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer", padding: "4px 16px 4px 4px" }}>
+              <img src="/icons/products.png" height={40} width="auto" style={{ display: "block", flexShrink: 0 }} alt="" />
+              <span style={{ flex: 1, textAlign: "center" }}>All products</span>
             </button>
-            <button type="button" style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer" }}>
-              <img src="/icons/icon-plus.svg" width={20} height={20} alt="" />
-              Add design
+            <button type="button" onClick={() => setShowDesignRow(v => !v)} style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer", padding: "4px 16px 4px 4px" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 999, background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <img src="/icons/icon-plus.svg" width={20} height={20} alt="" style={{ filter: "brightness(0) invert(1)" }} />
+              </div>
+              <span style={{ flex: 1, textAlign: "center" }}>Add design</span>
             </button>
           </div>
           </div>
@@ -750,7 +956,10 @@ export default function App() {
             outline: "none",
             fontFamily: '"Inter Variable", sans-serif',
           }}>
-            <div style={{ width: 40, height: 4, borderRadius: 999, background: "#e0e0e0", margin: "0 auto 20px" }} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Product color</span>
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setColorDrawerOpen(false)} />
+            </div>
             <div style={{
               display: "flex",
               flexWrap: "wrap",
@@ -767,6 +976,79 @@ export default function App() {
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
+      </div>{/* end blur wrapper */}
+
+      {/* Overlay — click catcher only, no blur (blur is on the wrapper above) */}
+      {designMenuOpen && (
+        <div onClick={() => setDesignMenuOpen(false)} style={{ position: "absolute", inset: 0, zIndex: 30 }} />
+      )}
+
+      {/* Pill stack + plus button — always above overlay */}
+      <div style={{
+        position: "absolute",
+        right: 16,
+        bottom: 84,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: 8,
+        transform: revealed ? "translateX(0)" : "translateX(20px)",
+        opacity: revealed ? 1 : 0,
+        transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 600ms, opacity 0.3s ease 600ms" : "none",
+        zIndex: 31,
+      }}>
+        {[
+          { icon: "icon-graphics.svg", label: "Graphics" },
+          { icon: "icon-text.svg", label: "Text" },
+          { icon: "icon-uploads.svg", label: "Uploads" },
+          { icon: "icon-sparkles-ai.svg", label: "AI Design" },
+        ].map(({ icon, label }, i) => (
+          <div key={label} onClick={() => { if (label === "Text") addTextItem(); }} style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            height: 46,
+            background: "#fff",
+            borderRadius: 999,
+            padding: "2px 16px 2px 12px",
+            boxShadow: "0 1px 5px rgba(0,0,0,0.08)",
+            transform: designMenuOpen ? "translateX(0)" : "translateX(120px)",
+            opacity: designMenuOpen ? 1 : 0,
+            pointerEvents: designMenuOpen ? "all" : "none",
+            transition: `transform 0.35s cubic-bezier(0.34,1.4,0.64,1) ${i * 50}ms, opacity 0.25s ease ${i * 50}ms`,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            boxSizing: "border-box",
+          }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "#111", fontFamily: '"Inter Variable", sans-serif' }}>{label}</span>
+            <img src={`/icons/${icon}`} width={22} height={22} alt={label} style={{ opacity: 0.7 }} />
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setDesignMenuOpen(v => !v); }}
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: 999,
+            border: "none",
+            background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
+            boxShadow: "0 4px 14px 0 rgba(0, 0, 0, 0.25)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <svg
+            width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+            style={{ transform: designMenuOpen ? "rotate(315deg)" : "rotate(0deg)", transition: "transform 0.8s cubic-bezier(0.34,1.4,0.64,1)" }}
+          >
+            <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

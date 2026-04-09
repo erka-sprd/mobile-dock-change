@@ -1,4 +1,14 @@
 
+
+* {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.font-outer-sans {
+  font-family: "MADEOuterSans", sans-serif;
+}
+
 :root {
   --color-red-600: #DC2626;
   --color-blue-700: #4D52D2;
