@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Drawer } from "vaul";
 import EmbroideryPreview from "./EmbroideryPreview";
+import SizeSelection from "./SizeSelection";
 
 const BAR_BTN_INITIAL = 130;
 
@@ -9,6 +10,7 @@ const DEFAULT_COLOR = "softEcru";
 const HEADER = 56;
 const EDITOR_MIN = 170;
 const THRESHOLD = 10;
+const EDITOR_BOTTOM_OFFSET = 80; // extra bottom padding to shift product upward from center
 
 const COLORS = [
   { key: "black",       label: "Black" },
@@ -23,14 +25,29 @@ const COLORS = [
   { key: "white",       label: "White" },
 ];
 
+const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"] as const;
+
+const SIZE_OUT_OF_STOCK: Record<string, string[]> = {
+  black:       ["XS", "3XL", "4XL"],
+  heathergrey: ["S", "XXL"],
+  khaki:       ["XS", "S", "4XL"],
+  mocha:       ["3XL", "4XL"],
+  navyblue:    ["XS", "4XL"],
+  pinkjoy:     ["S", "M", "3XL", "4XL"],
+  softEcru:    ["XL", "XXL", "3XL"],
+  stone:       ["XS", "S"],
+  violet:      ["4XL"],
+  white:       ["XS", "M", "3XL", "4XL"],
+};
+
 const colorHasCloseup = (key: string) => key !== "mocha";
 
 const getSlidesForColor = (key: string) => [
-  { label: "Front", src: `/img/product-images/${key}-front.png` },
-  { label: "Back", src: `/img/product-images/${key}-back.png` },
-  { label: "Left Arm", src: `/img/product-images/${key}-leftarm.png` },
-  { label: "Right Arm", src: `/img/product-images/${key}-rightarm.png` },
-  ...(colorHasCloseup(key) ? [{ label: "Close Up", src: `/img/product-images/${key}-closeup.png` }] : []),
+  { label: "Front", src: `/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${key}-front.webp` },
+  { label: "Back", src: `/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${key}-back.webp` },
+  { label: "Left Arm", src: `/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${key}-leftarm.webp` },
+  { label: "Right Arm", src: `/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${key}-rightarm.webp` },
+  ...(colorHasCloseup(key) ? [{ label: "Close Up", src: `/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${key}-closeup.webp` }] : []),
 ];
 
 const FRONT_PRINT_AREA     = { x: 0.27,  y: 0.22, w: 0.44, h: 0.5 };
@@ -58,13 +75,13 @@ export default function App() {
   const [imageNaturalSize, setImageNaturalSize] = useState({ width: 1, height: 1 });
   const [editorSize, setEditorSize] = useState({ width: 0, height: 0 });
 
-  const [selectedColor] = useState(DEFAULT_COLOR);
+  const [selectedColor, setSelectedColor] = useState(DEFAULT_COLOR);
   const slides = getSlidesForColor(selectedColor);
-  const [index, setIndex] = useState(0);
+  const savedSlideIndex = parseInt(localStorage.getItem("activeSlideIndex") ?? "0", 10) || 0;
+  const [index, setIndex] = useState(savedSlideIndex);
   const [showSlideLabel, setShowSlideLabel] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(savedSlideIndex);
   const [targetIndex, setTargetIndex] = useState<number | null>(null);
-  const [slideDirection, setSlideDirection] = useState<"left" | "right">("right");
   const [phase, setPhase] = useState<"idle" | "out" | "in">("idle");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -74,21 +91,44 @@ export default function App() {
   const [barScrollProgress, setBarScrollProgress] = useState(0);
   const [scrollAtEnd, setScrollAtEnd] = useState(false);
   const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
+  const [allProductsDrawerOpen, setAllProductsDrawerOpen] = useState(false);
+  const [colorDrawerScrolled, setColorDrawerScrolled] = useState(false);
+  const [openAccordions, setOpenAccordions] = useState<Set<string>>(new Set());
+  const [designDrawerOpen, setDesignDrawerOpen] = useState(false);
+  const [sizeDrawerOpen, setSizeDrawerOpen] = useState(false);
+  const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [printTechnique, setPrintTechnique] = useState<"embroidery" | "standard">("embroidery");
+  const [savedPrintTechnique, setSavedPrintTechnique] = useState<"embroidery" | "standard">("embroidery");
   const [embroideryDataUrl, setEmbroideryDataUrl] = useState<string | null>(null);
   const [embroideryRenderedUrl, setEmbroideryRenderedUrl] = useState<string | null>(null);
-  const [designMenuOpen, setDesignMenuOpen] = useState(false);
-  const [designItems, setDesignItems] = useState<Array<{
-    id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number;
-  }>>([]);
+  type DesignItem = { id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number; };
+  const [allDesignItems, setAllDesignItems] = useState<Record<string, DesignItem[]>>(() => {
+    try {
+      const saved = localStorage.getItem("designItems");
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+  const currentSlideLabel = slides[activeIndex]?.label ?? "Front";
+  const designItems: DesignItem[] = allDesignItems[currentSlideLabel] ?? [];
+  const setDesignItems = (updater: DesignItem[] | ((prev: DesignItem[]) => DesignItem[])) => {
+    setAllDesignItems(all => {
+      const prev = all[currentSlideLabel] ?? [];
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      return { ...all, [currentSlideLabel]: next };
+    });
+  };
+
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [designGestureActive, setDesignGestureActive] = useState(false);
 
-  const [showPopup, setShowPopup] = useState(true);
+  const hasAnyItems = Object.keys(allDesignItems).some((k) => (allDesignItems[k] as DesignItem[]).length > 0);
+  const activeIsEmpty = designItems.length === 0;
+  const [showPopup, setShowPopup] = useState(!hasAnyItems);
   const [showDesignRow, setShowDesignRow] = useState(false);
   const [animating, setAnimating] = useState(false);
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, setRevealed] = useState(hasAnyItems);
 
   const dismissPopup = () => {
     setShowPopup(false);
@@ -100,6 +140,7 @@ export default function App() {
   const blackBtnRef = useRef<HTMLButtonElement>(null);
   const blackBtnExpandedWidth = useRef<number | null>(null);
   const blackBtnAnimRef = useRef<number | null>(null);
+
   const blackBtnCurrentWidth = useRef<number | null>(null);
   const isCompactRef = useRef(false);
   const isAnimatingRef = useRef(false);
@@ -183,6 +224,16 @@ export default function App() {
     blackBtnExpandedWidth.current = w;
     blackBtnCurrentWidth.current = w;
     scroll.style.paddingLeft = `${16 + w + 8}px`;
+
+    const ro = new ResizeObserver(() => {
+      if (isAnimatingRef.current || isCompactRef.current) return;
+      const newW = btn.offsetWidth;
+      blackBtnExpandedWidth.current = newW;
+      blackBtnCurrentWidth.current = newW;
+      scroll.style.paddingLeft = `${16 + newW + 8}px`;
+    });
+    ro.observe(btn);
+    return () => ro.disconnect();
   }, []);
 
   const imageGesture = useRef({
@@ -337,7 +388,7 @@ export default function App() {
   };
 
   const onEditorTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (selectedDesignId) return;
+    if (selectedDesignId) { setSelectedDesignId(null); return; }
     if (e.touches.length === 2) {
       if (zoom <= 1) setPan({ x: 0, y: 0 });
       imageGesture.current = {
@@ -367,6 +418,10 @@ export default function App() {
   };
 
   const onEditorTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (designGestureRef.current.type !== "idle") {
+      handleDesignMove(e);
+      return;
+    }
     if (imageGesture.current.mode === "pinch") {
       if (e.touches.length !== 2) return;
       e.preventDefault();
@@ -397,6 +452,10 @@ export default function App() {
   };
 
   const onEditorTouchEnd = () => {
+    if (designGestureRef.current.type !== "idle") {
+      handleDesignEnd();
+      return;
+    }
     imageGesture.current.mode = "idle";
     if (imageGesture.current.lastZoom <= 1) {
       imageGesture.current.lastZoom = 1;
@@ -409,7 +468,7 @@ export default function App() {
   const goToSlide = (nextIndex: number) => {
     const clampedIndex = Math.max(0, Math.min(slides.length - 1, nextIndex));
     if (clampedIndex === activeIndex || phase !== "idle") return;
-    setSlideDirection(clampedIndex > activeIndex ? "right" : "left");
+
     setTargetIndex(clampedIndex);
     setIndex(clampedIndex);
     setShowSlideLabel(true);
@@ -426,7 +485,8 @@ export default function App() {
       : label === "Right Arm" ? RIGHT_ARM_PRINT_AREA
       : null;
     if (!area) return null;
-    const rect = getContainRect(editorSize.width, editorSize.height, imageNaturalSize.width, imageNaturalSize.height);
+    const contentH = editorSize.height - EDITOR_BOTTOM_OFFSET;
+    const rect = getContainRect(editorSize.width, contentH, imageNaturalSize.width, imageNaturalSize.height);
     return {
       left: rect.left + rect.width * area.x,
       top: rect.top + rect.height * area.y,
@@ -434,6 +494,18 @@ export default function App() {
       height: rect.height * area.h,
     };
   }, [editorSize, activeIndex, imageNaturalSize, selectedColor]);
+
+  const paCenterZoomed = useMemo(() => {
+    if (!currentPA) return { x: 0, y: 0 };
+    const cx = currentPA.left + currentPA.width / 2;
+    const cy = currentPA.top + currentPA.height / 2;
+    const zoomCy = (editorSize.height - EDITOR_BOTTOM_OFFSET) / 2;
+    return {
+      x: zoom <= 1 ? cx : (cx - editorSize.width / 2) * zoom + editorSize.width / 2 + pan.x,
+      y: zoom <= 1 ? cy : (cy - zoomCy) * zoom + zoomCy + pan.y,
+    };
+  }, [currentPA, zoom, pan, editorSize]);
+
 
   useEffect(() => { currentPARef.current = currentPA; }, [currentPA]);
 
@@ -447,7 +519,7 @@ export default function App() {
       w: 0, fontSize: 28,
     }]);
     setSelectedDesignId(id);
-    setDesignMenuOpen(false);
+    setDesignDrawerOpen(false);
   };
 
   const addGraphicItem = () => {
@@ -461,7 +533,7 @@ export default function App() {
       w: size, fontSize: 0,
     }]);
     setSelectedDesignId(id);
-    setDesignMenuOpen(false);
+    setDesignDrawerOpen(false);
   };
 
   const flattenDesignItems = (): Promise<string> => {
@@ -546,6 +618,18 @@ export default function App() {
   };
 
   useEffect(() => {
+    localStorage.setItem("designItems", JSON.stringify(allDesignItems));
+  }, [allDesignItems]);
+
+  useEffect(() => {
+    if (hasAnyItems) setShowPopup(false);
+  }, [hasAnyItems]);
+
+  useEffect(() => {
+    localStorage.setItem("activeSlideIndex", String(activeIndex));
+  }, [activeIndex]);
+
+  useEffect(() => {
     if (!selectedDesignId) return;
     const handler = (e: TouchEvent) => {
       const el = itemElRefs.current.get(selectedDesignId);
@@ -568,12 +652,16 @@ export default function App() {
       if (item.id !== g.itemId) return item;
       const measured = itemSizeRefs.current.get(item.id);
       const itemW = measured?.w ?? g.startW;
-      const itemH = measured?.h ?? item.fontSize * 1.5;
+      const itemH = measured?.h ?? (item.type === "image" ? item.w : item.fontSize * 1.5);
+      // x,y is the CSS left/top, but items use translate(-50%,-50%) for images
+      // and translateX(-50%) for text, so constrain from the visual center/edge
+      const halfW = itemW / 2;
+      const halfH = item.type === "image" ? itemH / 2 : 0;
       if (g.type === "move") {
         return {
           ...item,
-          x: Math.max(0, Math.min(pa.width - itemW, g.startX + dx)),
-          y: Math.max(0, Math.min(pa.height - itemH, g.startY + dy)),
+          x: Math.max(halfW, Math.min(pa.width - halfW, g.startX + dx)),
+          y: Math.max(halfH, Math.min(pa.height - itemH + halfH, g.startY + dy)),
         };
       }
       const signedDx = (g.type === "resize-bl" || g.type === "resize-tl") ? -dx : dx;
@@ -603,7 +691,7 @@ export default function App() {
       }}
     >
       {/* Page content — blurred when design menu is open */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden", filter: designMenuOpen ? "blur(2px)" : "none", transition: "filter 0.2s ease", pointerEvents: designMenuOpen ? "none" : "all" }}>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
       {/* Orange banner */}
       <div style={{ background: "#E8502A", color: "#fff", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, height: 36, flexShrink: 0 }}>
         Winter Sale 20%
@@ -652,11 +740,11 @@ export default function App() {
             let visibility: "visible" | "hidden" = "visible";
 
             if (isActive) {
-              if (phase === "out") { opacity = 0; transform = `translate3d(${slideDirection === "right" ? 24 : -24}px,0,0)`; }
+              if (phase === "out") { opacity = 0; }
               else { opacity = 1; }
             }
             if (isTarget) {
-              if (phase === "out") { opacity = 0; visibility = "hidden"; transform = `translate3d(${slideDirection === "right" ? 24 : -24}px,0,0)`; }
+              if (phase === "out") { opacity = 0; visibility = "hidden"; }
               else if (phase === "in") { opacity = 1; visibility = "visible"; }
             }
 
@@ -673,7 +761,7 @@ export default function App() {
                 alt={slide.label}
                 draggable={false}
                 style={{
-                  position: "absolute", inset: 0, width: "100%", height: "100%",
+                  position: "absolute", top: 0, left: 0, width: "100%", height: `calc(100% - ${EDITOR_BOTTOM_OFFSET}px)`,
                   objectFit: "contain", transformOrigin: "center center",
                   opacity, visibility,
                   transform: `${transform} translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
@@ -699,10 +787,10 @@ export default function App() {
                 borderRadius: 4,
                 pointerEvents: "none",
                 zIndex: 5,
-                opacity: phase === "out" ? 0 : 1,
-                transition: "opacity 100ms ease-in-out",
+                opacity: phase === "out" ? 0 : (activeIsEmpty || selectedDesignId || designGestureActive) ? 1 : 0,
+                transition: "opacity 180ms ease-in-out",
                 transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
-                transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${editorSize.height / 2 - currentPA.top}px`,
+                transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${(editorSize.height - EDITOR_BOTTOM_OFFSET) / 2 - currentPA.top}px`,
               }} />
 
               {/* Design items — same transform as print area so they zoom/pan in sync and stay locked to their position */}
@@ -711,8 +799,10 @@ export default function App() {
                 left: 0, top: 0, width: "100%", height: "100%",
                 pointerEvents: "none",
                 transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
-                transformOrigin: `${editorSize.width / 2}px ${editorSize.height / 2}px`,
-                zIndex: 6,
+                transformOrigin: `${editorSize.width / 2}px ${(editorSize.height - EDITOR_BOTTOM_OFFSET) / 2}px`,
+                zIndex: designGestureActive ? 16 : 6,
+                opacity: phase === "out" ? 0 : 1,
+                transition: "opacity 180ms ease-in-out",
               }}>
                 {designItems.map(item => {
                   const isSelected = item.id === selectedDesignId;
@@ -736,7 +826,22 @@ export default function App() {
                         textAlign: "center",
                         zIndex: isSelected ? 10 : 1,
                       }}
-                      onTouchStart={(e) => { e.stopPropagation(); setSelectedDesignId(item.id); }}
+                      onTouchStart={(e) => {
+                        e.stopPropagation();
+                        setSelectedDesignId(item.id);
+                        const touch = e.touches[0];
+                        designGestureRef.current = {
+                          type: "move",
+                          itemId: item.id,
+                          startTx: touch.clientX,
+                          startTy: touch.clientY,
+                          startX: item.x,
+                          startY: item.y,
+                          startW: item.w,
+                          startFontSize: item.fontSize,
+                        };
+                        setDesignGestureActive(true);
+                      }}
                     >
                       {item.type === "image" ? (
                         <img src={item.src} alt="" draggable={false} style={{ display: "block", width: item.w, height: item.w, objectFit: "contain", userSelect: "none", WebkitUserSelect: "none" }} />
@@ -807,18 +912,41 @@ export default function App() {
             </>
           )}
 
-          {/* Gesture capture during drag/resize */}
-          {designGestureActive && (
-            <div
-              style={{ position: "absolute", inset: 0, zIndex: 15, touchAction: "none" }}
-              onTouchMove={handleDesignMove}
-              onTouchEnd={handleDesignEnd}
-            />
+
+          {/* Print-area centered + button — shown when other sides have items but this one is empty */}
+          {!showPopup && currentPA && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setDesignDrawerOpen(true); }}
+              style={{
+                position: "absolute",
+                left: paCenterZoomed.x,
+                top: paCenterZoomed.y,
+                transform: activeIsEmpty && phase !== "out" ? "translate(-50%, -50%) scale(1)" : "translate(-50%, -50%) scale(0)",
+                opacity: activeIsEmpty && phase !== "out" ? 1 : 0,
+                filter: activeIsEmpty && phase !== "out" ? "blur(0px)" : "blur(8px)",
+                pointerEvents: activeIsEmpty && phase !== "out" ? "all" : "none",
+                transition: phase === "out" ? "opacity 180ms ease-in-out, transform 180ms ease-in-out, filter 180ms ease-in-out" : "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 80ms, opacity 0.3s ease 80ms, filter 0.3s ease 80ms",
+                width: 56, height: 56,
+                borderRadius: 999,
+                border: "none",
+                background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
+                boxShadow: "0 4px 14px 0 rgba(0,0,0,0.25)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer",
+                zIndex: 20,
+              }}
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                style={{ transition: "transform 0.4s cubic-bezier(0.34,1.4,0.64,1)" }}>
+                <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
+              </svg>
+            </button>
           )}
         </div>
 
         {/* Product view indicators */}
-        <div style={{ position: "absolute", bottom: 16, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 16, pointerEvents: "auto", zIndex: 10 }}>
+        <div style={{ position: "absolute", bottom: 88, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 16, pointerEvents: "auto", zIndex: 10 }}>
           <button type="button" aria-label="Previous slide" onClick={() => goToSlide(index - 1)} style={{ background: "none", border: "none", fontSize: 28, cursor: "pointer", color: "#000", WebkitTextFillColor: "#000", WebkitAppearance: "none", appearance: "none", padding: 0, lineHeight: 1 }}>‹</button>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             {slides.map((_, i) => (
@@ -844,18 +972,20 @@ export default function App() {
         </div>
 
         {/* Slide label */}
-        <div style={{ position: "absolute", bottom: 42, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+        <div style={{ position: "absolute", bottom: 112, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#000", letterSpacing: 0.6, textTransform: "uppercase", opacity: showSlideLabel ? 1 : 0, transform: `translateY(${showSlideLabel ? 0 : -4}px)`, transition: "opacity 220ms ease-out, transform 220ms ease-out" }}>
             {slides[index].label.replace(/\s+/g, "").toUpperCase()}
           </div>
         </div>
       </div>
 
+
+
       {/* Bottom gradient backdrop */}
-      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 200, background: "linear-gradient(to top, rgba(0,0,0,0.07) 0%, rgba(242,242,242,0.07) 100%)", zIndex: 1, pointerEvents: "none" }} />
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 150, background: "linear-gradient(to top, rgba(0,0,0,0.07) 0%, rgba(242,242,242,0.07) 100%)", zIndex: 1, pointerEvents: "none" }} />
 
       {/* Bottom action bar */}
-      <div id="action-bar" style={{ position: "relative", paddingTop: 12, paddingBottom: 20, flexShrink: 0, overflow: "visible", zIndex: 2 }}>
+      <div id="action-bar" style={{ position: "absolute", bottom: 0, left: 0, right: 0, paddingTop: 12, paddingBottom: 20, overflow: "visible", zIndex: 2 }}>
         {/* Scrollable gray buttons — offset by black button width */}
         <div
           id="action-bar-scroll"
@@ -880,21 +1010,20 @@ export default function App() {
             touchAction: "pan-x",
           }}
         >
-          <button type="button" className="action-bar-btn" onClick={() => setColorDrawerOpen(true)} style={{ height: 46, padding: "2px 16px 2px 8px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 4, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
-            <img src={`/img/product-images/${selectedColor}-front.png`} width={28} height={28} alt="" style={{ borderRadius: 999, display: "block", objectFit: "cover" }} />
-            <span>Color</span>
-            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
-          </button>
-          <button type="button" className="action-bar-btn" onClick={async () => { const url = await flattenDesignItems(); setEmbroideryDataUrl(url || null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 60ms" : "none" }}>
-            <img src="/img/preview.png" width={38} height={38} alt="" style={{ borderRadius: 999, display: "block" }} />
-            <span>Preview</span>
-          </button>
-          <button type="button" className="action-bar-btn" style={{ height: 46, padding: "2px 16px 2px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 120ms" : "none" }}>
-            <img src="/icons/embroidery.png" width={38} height={38} alt="" style={{ borderRadius: 999, display: "block" }} />
-            <span>Embroidery</span>
-            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
-          </button>
-          <button type="button" className="action-bar-btn" style={{ height: 46, padding: "0 16px 0px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
+          <div style={{ display: "flex", alignItems: "center", height: 46, borderRadius: 999, background: "#F4F4F4", flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", overflow: "hidden", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
+            <button type="button" className="action-bar-btn" onClick={() => setColorDrawerOpen(true)} style={{ height: "100%", padding: "2px 12px 2px 8px", border: "none", background: "transparent", color: "#000", display: "flex", alignItems: "center", gap: 4, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+              <img src={`/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${selectedColor}-front.webp`} width={28} height={28} alt="" style={{ borderRadius: 999, display: "block", objectFit: "cover" }} />
+
+              <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+            </button>
+            <div style={{ width: 1, alignSelf: "stretch", background: "#e1e1e1", flexShrink: 0 }} />
+            <button type="button" className="action-bar-btn" onClick={async () => { const url = await flattenDesignItems(); setEmbroideryDataUrl(url || null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: "100%", padding: "2px 12px 2px 12px", border: "none", background: "transparent", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+              <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
+              <span>Print</span>
+              <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+            </button>
+          </div>
+          <button type="button" onClick={() => setAllProductsDrawerOpen(true)} className="action-bar-btn" style={{ height: 46, padding: "0 16px 0px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
             <img src="/icons/products.png" width={"auto"} height={40} style={{ marginTop: -2 }} alt="" />
             <span>All products</span>
           </button>
@@ -920,6 +1049,7 @@ export default function App() {
           id="action-bar-black-btn"
           ref={blackBtnRef}
           type="button"
+          onClick={() => setSizeDrawerOpen(true)}
           style={{
             position: "absolute",
             left: 16,
@@ -946,14 +1076,14 @@ export default function App() {
           }}
         >
           <img src="/icons/icon-cart-plus.svg" alt="Cart" style={{ width: 20, height: 20, filter: "invert(1)", flexShrink: 0 }} />
-          <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute", left: 38 } : {}) }}>{(17.98 + (designItems.length > 0 ? 6 : 0)).toFixed(2).replace(".", ",") + " €"}</span>
+          <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute", left: 38 } : {}) }}>{(17.98 + Object.keys(allDesignItems).filter(k => (allDesignItems[k] as DesignItem[]).length > 0).length * 6).toFixed(2).replace(".", ",") + " €"}</span>
         </button>
 
       </div>
 
-      {showPopup && (
+      {showPopup && !hasAnyItems && (
         <>
-          <div onTouchStart={dismissPopup} onClick={dismissPopup} style={{ position: "absolute", inset: 0, zIndex: 11, backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", touchAction: "none", cursor: "pointer" }} />
+          <div onTouchStart={(e) => { e.preventDefault(); dismissPopup(); }} onClick={dismissPopup} style={{ position: "fixed", inset: 0, zIndex: 50, backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", touchAction: "none", cursor: "pointer" }} />
           <div id="onboarding-popup" style={{
             position: "absolute",
             bottom: 16,
@@ -963,7 +1093,7 @@ export default function App() {
             borderRadius: 20,
             padding: "24px 20px 20px",
             boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
-            zIndex: 12,
+            zIndex: 51,
             fontFamily: '"MADEOuterSans", sans-serif',
           }}>
           <p style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 500, textAlign: "center", lineHeight: 1.3 }}>
@@ -991,7 +1121,7 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", gap: 10 }}>
-            <button type="button" style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer", padding: "4px 16px 4px 4px" }}>
+            <button type="button" onClick={() => setAllProductsDrawerOpen(true)} style={{ flex: 1, height: 48, borderRadius: 999, border: "none", background: "#f0f0f0", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer", padding: "4px 16px 4px 4px" }}>
               <img src="/icons/products.png" height={40} width="auto" style={{ display: "block", flexShrink: 0 }} alt="" />
               <span style={{ flex: 1, textAlign: "center" }}>All products</span>
             </button>
@@ -1018,38 +1148,138 @@ export default function App() {
             background: "#fff",
             borderTopLeftRadius: 16,
             borderTopRightRadius: 16,
-            padding: "20px 16px 40px",
             outline: "none",
             fontFamily: '"Inter Variable", sans-serif',
+            display: "flex",
+            flexDirection: "column",
+            height: 400,
           }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Product color</span>
-              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setColorDrawerOpen(false)} />
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "20px 16px 16px", boxShadow: colorDrawerScrolled ? "0 2px 8px rgba(0,0,0,0.08)" : "none", transition: "box-shadow 0.2s ease" }}>
+              <div className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Stanley/Stella Oversized Unisex Organic T-shirt Blaster 2.0</div>
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer", flexShrink: 0 }} onClick={() => setColorDrawerOpen(false)} />
             </div>
-            <div style={{
-              display: "flex",
-              flexWrap: "wrap",
-              justifyContent: "center",
-              gap: 8,
-            }}>
-              {COLORS.map(({ key, label }) => (
-                <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, width: "calc(25% - 6px)" }}>
-                  <img src={`/img/product-images/${key}-front.png`} alt={label} style={{ width: "100%", display: "block" }} />
-                  <span style={{ fontSize: 12, color: "#111", textAlign: "center" }}>{label}</span>
+            <div style={{ overflowY: "auto", flex: 1, paddingTop: 16 }} onScroll={e => setColorDrawerScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}>
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#111", textTransform: "uppercase", paddingLeft: 16, marginBottom: 12 }}>
+                COLOR: {COLORS.find(c => c.key === selectedColor)?.label.toUpperCase()}
+              </div>
+              <div style={{
+                display: "flex",
+                gap: 0,
+                overflowX: "auto",
+                paddingBottom: 4,
+                paddingLeft: 16,
+                scrollbarWidth: "none",
+                WebkitOverflowScrolling: "touch" as any,
+                marginBottom: 14,
+              }}>
+                {COLORS.map(({ key, label }, i) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-label={label}
+                    onClick={() => setSelectedColor(key)}
+                    style={{
+                      width: 58,
+                      height: 58,
+                      borderTopLeftRadius: i === 0 ? 8 : 0,
+                      borderBottomLeftRadius: i === 0 ? 8 : 0,
+                      borderTopRightRadius: i === COLORS.length - 1 ? 8 : 0,
+                      borderBottomRightRadius: i === COLORS.length - 1 ? 8 : 0,
+                      border: key === selectedColor ? "2px solid #111" : "1px solid #dedede",
+                      background: key === selectedColor ? "#F4F4F4" : "none",
+                      padding: 8,
+                      flexShrink: 0,
+                      boxSizing: "border-box",
+                      overflow: "hidden",
+                      cursor: "pointer",
+                      marginRight: -1,
+                      position: "relative",
+                      zIndex: key === selectedColor ? 1 : 0,
+                    }}
+                  >
+                    <img
+                      src={`/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${key}-front.webp`}
+                      alt={label}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6, display: "block" }}
+                    />
+                  </button>
+                ))}
+                <div style={{ width: 12, flexShrink: 0 }} />
+              </div>
+              <div style={{ border: "1px solid #dedede", borderRadius: 12, overflow: "hidden", marginLeft: 16, marginRight: 16, marginBottom: 14, padding: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#111", textTransform: "uppercase", marginBottom: 8 }}>
+                  Available Sizes:
                 </div>
-              ))}
+                <div style={{ fontSize: 14, lineHeight: 1.8 }}>
+                  {SIZES.map((size, i) => {
+                    const oos = (SIZE_OUT_OF_STOCK[selectedColor] ?? []).indexOf(size) !== -1;
+                    return (
+                      <span key={size}>
+                        {i > 0 && <span style={{ color: "#bbb", margin: "0 4px" }}> · </span>}
+                        <span style={{ color: oos ? "#bbb" : "#111", textDecoration: oos ? "line-through" : "none" }}>{size}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              <div style={{ border: "1px solid #dedede", borderRadius: 12, overflow: "hidden", marginBottom: 34, marginLeft: 16, marginRight: 16 }}>
+                {[
+                  { key: "product-details", label: "Product details", content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua." },
+                  { key: "size-fit", label: "Size & fit", content: "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat." },
+                  { key: "product-views", label: "Product views", extra: (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                      {[1,2,3,4].map(i => <svg key={i} width="18" height="18" viewBox="0 0 24 24" fill="#EA580C"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>)}
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EA580C" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                      <span style={{ fontSize: 14, color: "#111" }}>4.5 (128 reviews)</span>
+                    </div>
+                  ), content: "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur." },
+                ].map(({ key, label, content, extra }: { key: string; label: string; content: string; extra?: React.ReactNode }, i) => (
+                  <div key={key} style={{ borderTop: i === 0 ? "none" : "1px solid #dedede" }}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenAccordions(prev => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; })}
+                      style={{ width: "100%", background: "none", border: "none", padding: "16px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+                    >
+                      <div style={{ textAlign: "left" }}>
+                        <div style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>{label}</div>
+                        {!openAccordions.has(key) && extra}
+                      </div>
+                      <img src="/icons/icon-chevron-down.svg" alt="" style={{ width: 20, height: 20, filter: "invert(20%)", flexShrink: 0, transition: "transform 0.2s", transform: openAccordions.has(key) ? "rotate(180deg)" : "none" }} />
+                    </button>
+                    <div style={{ overflow: "hidden", maxHeight: openAccordions.has(key) ? 200 : 0, transition: "max-height 0.3s cubic-bezier(0.16,1,0.3,1)" }}>
+                      <p style={{ margin: "0 16px 16px", fontSize: 14, color: "#555", lineHeight: 1.6 }}>{content}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
 
-      <Drawer.Root open={previewDrawerOpen} onOpenChange={setPreviewDrawerOpen}>
+      <Drawer.Root open={previewDrawerOpen} onOpenChange={(open) => { if (!open) setPrintTechnique(savedPrintTechnique); setPreviewDrawerOpen(open); }}>
         <Drawer.Portal>
           <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
           <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 20, paddingBottom: 40, outline: "none", fontFamily: '"Inter Variable", sans-serif' }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, paddingLeft: 16, paddingRight: 16 }}>
-              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Preview</span>
-              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setPreviewDrawerOpen(false)} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingLeft: 16, paddingRight: 16 }}>
+              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Print technique</span>
+              {printTechnique !== savedPrintTechnique ? (
+                <img src="/icons/icon-check.svg" alt="Save" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => { setSavedPrintTechnique(printTechnique); setPreviewDrawerOpen(false); }} />
+              ) : (
+                <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setPreviewDrawerOpen(false)} />
+              )}
+            </div>
+            <div style={{ display: "flex", paddingLeft: 16, paddingRight: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", borderRadius: 999, background: "#f0f0f0", padding: 4, gap: 4, width: "100%" }}>
+                <button type="button" onClick={() => setPrintTechnique("standard")} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "standard" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                  <img src="/icons/icon-droplet.svg" width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
+                  Standard print
+                </button>
+                <button type="button" onClick={() => setPrintTechnique("embroidery")} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "embroidery" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                  <img src="/icons/icon-needle-embroidery.svg" width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
+                  Embroidery
+                </button>
+              </div>
             </div>
             <div style={{ background: "#FEFCE8", padding: "10px 16px", margin: 12, display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 14, color: "#854D0E", lineHeight: 1.4 }}>We can stitch your design a bit smaller, like in the previews</span>
@@ -1065,7 +1295,7 @@ export default function App() {
                 <>
                   {/* 1 — embroidery preview */}
                   <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#e8e8e8", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <img src={`/img/product-images/${selectedColor}-front.png`} alt="" style={{ position: "absolute", top: "50%", left: "50%", width: "100%", height: "100%", objectFit: "contain", transform: "translate(-50%, -50%) scale(6)", transformOrigin: "center center", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                    <img src={`/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${selectedColor}-front.webp`} alt="" style={{ position: "absolute", top: "50%", left: "50%", width: "100%", height: "100%", objectFit: "contain", transform: "translate(-50%, -50%) scale(6)", transformOrigin: "center center", WebkitTouchCallout: "none" } as React.CSSProperties} />
                     {embroideryDataUrl
                       ? <EmbroideryPreview src={embroideryDataUrl} maxSize={500} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", position: "relative" }} onRendered={setEmbroideryRenderedUrl} />
                       : <span style={{ fontSize: 14, color: "#000", position: "relative" }}>You'll preview embroidery here.</span>
@@ -1098,77 +1328,131 @@ export default function App() {
 
       </div>{/* end blur wrapper */}
 
-      {/* Overlay — click catcher only, no blur (blur is on the wrapper above) */}
-      {designMenuOpen && (
-        <div onClick={() => setDesignMenuOpen(false)} style={{ position: "absolute", inset: 0, zIndex: 30 }} />
-      )}
-
-      {/* Pill stack + plus button — always above overlay */}
+      {/* Plus button — Scenario A: bottom-right when active side has items */}
       <div style={{
         position: "absolute",
         right: 16,
         bottom: 84,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
-        gap: 8,
-        transform: revealed ? "translateX(0)" : "translateX(20px)",
+        transform: !revealed ? "translateX(20px)" : activeIsEmpty ? "translateX(120px)" : "translateX(0)",
         opacity: revealed ? 1 : 0,
-        transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 600ms, opacity 0.3s ease 600ms" : "none",
+        pointerEvents: revealed && !activeIsEmpty ? "all" : "none",
+        transition: !revealed ? "none" : activeIsEmpty
+          ? "transform 0.4s cubic-bezier(0.4,0,0.6,1), opacity 0.3s ease"
+          : "transform 0.4s cubic-bezier(0.34,1.56,0.64,1), opacity 0.3s ease",
         zIndex: 31,
       }}>
-        {[
-          { icon: "icon-graphics.svg", label: "Graphics" },
-          { icon: "icon-text.svg", label: "Text" },
-          { icon: "icon-uploads.svg", label: "Uploads" },
-          { icon: "icon-sparkles-ai.svg", label: "AI Design" },
-        ].map(({ icon, label }, i) => (
-          <div key={label} onClick={() => { if (label === "Text") addTextItem(); if (label === "Graphics") addGraphicItem(); }} style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            height: 46,
-            background: "#ffffff",
-            borderRadius: 999,
-            padding: "2px 16px 2px 12px",
-            boxShadow: "0 1px 5px rgba(0,0,0,0.08)",
-            transform: designMenuOpen ? "translateX(0)" : "translateX(120px)",
-            opacity: designMenuOpen ? 1 : 0,
-            pointerEvents: designMenuOpen ? "all" : "none",
-            transition: `transform 0.35s cubic-bezier(0.34,1.4,0.64,1) ${i * 50}ms, opacity 0.25s ease ${i * 50}ms`,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            boxSizing: "border-box",
-          }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "#111", fontFamily: '"Inter Variable", sans-serif' }}>{label}</span>
-            <img src={`/icons/${icon}`} width={22} height={22} alt={label} style={{ opacity: 0.7 }} />
-          </div>
-        ))}
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); setDesignMenuOpen(v => !v); }}
-          style={{
-            width: 56,
-            height: 56,
-            borderRadius: 999,
-            border: "none",
-            background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
-            boxShadow: "0 4px 14px 0 rgba(0, 0, 0, 0.25)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            flexShrink: 0,
-          }}
-        >
-          <svg
-            width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
-            style={{ transform: designMenuOpen ? "rotate(225deg)" : "rotate(0deg)", transition: "transform 0.4s cubic-bezier(0.34,1.4,0.64,1)" }}
-          >
+        <button type="button" onClick={() => setDesignDrawerOpen(true)} style={{
+          width: 56, height: 56, borderRadius: 999, border: "none",
+          background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
+          boxShadow: "0 4px 14px 0 rgba(0,0,0,0.25)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          cursor: "pointer",
+        }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
           </svg>
         </button>
       </div>
+
+      {/* Design options drawer */}
+      <Drawer.Root open={designDrawerOpen} onOpenChange={setDesignDrawerOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content style={{
+            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999,
+            background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16,
+            padding: "20px 16px 40px", outline: "none", fontFamily: '"Inter Variable", sans-serif',
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Add design</span>
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setDesignDrawerOpen(false)} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-around" }}>
+              {[
+                { icon: "icon-graphics.svg", label: "Graphics" },
+                { icon: "icon-text.svg", label: "Text" },
+                { icon: "icon-uploads.svg", label: "Uploads" },
+                { icon: "icon-sparkles-ai.svg", label: "AI Design" },
+              ].map(({ icon, label }) => (
+                <div key={label} onClick={() => {
+                  if (label === "Graphics") { addGraphicItem(); setDesignDrawerOpen(false); }
+                  if (label === "Text") { addTextItem(); setDesignDrawerOpen(false); }
+                }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                  <div style={{ width: 60, height: 60, borderRadius: 16, background: "#f4f4f4", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <img src={`/icons/${icon}`} width={28} height={28} alt={label} />
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#111" }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+
+      <SizeSelection
+        open={sizeDrawerOpen}
+        onOpenChange={setSizeDrawerOpen}
+        quantities={quantities}
+        setQuantities={setQuantities}
+        unitPrice={17.98 + Object.keys(allDesignItems).filter(k => (allDesignItems[k] as DesignItem[]).length > 0).length * 6}
+        outOfStock={SIZE_OUT_OF_STOCK[selectedColor] ?? []}
+      />
+
+      <Drawer.Root open={allProductsDrawerOpen} onOpenChange={setAllProductsDrawerOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content style={{
+            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999,
+            background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16,
+            outline: "none", fontFamily: '"Inter Variable", sans-serif',
+            display: "flex", flexDirection: "column", height: 400,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 16px" }}>
+              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>All products</span>
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setAllProductsDrawerOpen(false)} />
+            </div>
+            <div style={{ overflowY: "auto", flex: 1, padding: "0 16px 24px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {[
+                  {
+                    name: "Stanley/Stella Oversized Unisex Organic T-shirt Blaster 2.0",
+                    thumbnail: `/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-softEcru-front.webp`,
+                  },
+                  {
+                    name: "Unisex Hoodie",
+                    thumbnail: `/img/product-images/unisex-hoodie/unisex-hoodie-gray-front.webp`,
+                  },
+                  {
+                    name: "Organic Tote Bag",
+                    thumbnail: `/img/product-images/organic-tote-bag/organic-tote-bag-beige.webp`,
+                  },
+                  {
+                    name: "Relaxed Vintage Cap",
+                    thumbnail: `/img/product-images/relaxed-vintage-cap/relaxed-vintage cap-green.webp`,
+                  },
+                  {
+                    name: "Stripped Tennis Socks",
+                    thumbnail: `/img/product-images/stripped-tennis-socks/stripped-tennis-socks-whitemint.webp`,
+                  },
+                  {
+                    name: "Women Boxy Organic T-shirt",
+                    thumbnail: `/img/product-images/women-boxy-organic-tshirt/women-boxy-organic-tshirt-yellow.webp`,
+                  },
+                  {
+                    name: "Women Cropped Tank",
+                    thumbnail: `/img/product-images/women-cropped-tank/women-cropped-tank-black.webp`,
+                  },
+                ].map(({ name, thumbnail }) => (
+                  <button key={name} type="button" style={{ background: "#f7f7f7", border: "1px solid #e8e8e8", borderRadius: 12, overflow: "hidden", cursor: "pointer", textAlign: "left", padding: 0 }}>
+                    <img src={thumbnail} alt={name} style={{ width: "100%", aspectRatio: "1/1", objectFit: "cover", display: "block" }} />
+                    <div style={{ padding: "8px 10px 10px", fontSize: 12, fontWeight: 500, color: "#111", lineHeight: 1.4 }}>{name}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
     </div>
   );
 }
