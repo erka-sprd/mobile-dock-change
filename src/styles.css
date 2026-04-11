@@ -37,3 +37,9 @@
   background: #ededed !important;
   transition: background 0.05s ease !important;
 }
+
+.done-btn:active {
+  background: #f0f0f0 !important;
+  transition: background 0.05s ease !important;
+}
+

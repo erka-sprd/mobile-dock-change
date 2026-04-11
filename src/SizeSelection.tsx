@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Drawer } from "vaul";
 
-const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"] as const;
+const DEFAULT_SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"];
 
 interface Props {
   open: boolean;
@@ -10,10 +10,11 @@ interface Props {
   setQuantities: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   unitPrice: number;
   outOfStock?: string[];
+  sizes?: readonly string[];
 }
 
-export default function SizeSelection({ open, onOpenChange, quantities, setQuantities, unitPrice, outOfStock = [] }: Props) {
-  const totalQty = SIZES.reduce((a, k) => a + (quantities[k] ?? 0), 0);
+export default function SizeSelection({ open, onOpenChange, quantities, setQuantities, unitPrice, outOfStock = [], sizes = DEFAULT_SIZES }: Props) {
+  const totalQty = sizes.reduce((a, k) => a + (quantities[k] ?? 0), 0);
   const totalPrice = (totalQty * unitPrice).toFixed(2).replace(".", ",") + " €";
   const hasAny = totalQty > 0;
   const [scrolled, setScrolled] = useState(false);
@@ -37,7 +38,7 @@ export default function SizeSelection({ open, onOpenChange, quantities, setQuant
 
           {/* Sizes list */}
           <div style={{ overflowY: "auto", flex: 1 }} onScroll={e => setScrolled((e.currentTarget as HTMLDivElement).scrollTop > 0)}>
-            {SIZES.map((size, i) => {
+            {sizes.map((size: string, i: number) => {
               const qty = quantities[size] ?? 0;
               const oos = outOfStock.indexOf(size) !== -1;
               return (
@@ -61,7 +62,7 @@ export default function SizeSelection({ open, onOpenChange, quantities, setQuant
                       >+</button>
                     </div>
                   </div>
-                  {i < SIZES.length - 1 && <div style={{ height: 1, background: "#f0f0f0", margin: "0 16px" }} />}
+                  {i < sizes.length - 1 && <div style={{ height: 1, background: "#f0f0f0", margin: "0 16px" }} />}
                 </div>
               );
             })}
