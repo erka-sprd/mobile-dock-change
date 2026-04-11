@@ -133,12 +133,12 @@ export default function App() {
 
   const [selectedProductId, setSelectedProductId] = useState(() => {
     const saved = localStorage.getItem("selectedProductId");
-    return saved && PRODUCT_CONFIGS[saved] ? saved : "oversized-unisex-tshirt";
+    return saved && PRODUCT_CONFIGS[saved] ? saved : "unisex-hoodie";
   });
   const selectedProduct = PRODUCT_CONFIGS[selectedProductId];
   const [selectedColor, setSelectedColor] = useState(() => {
     const savedProduct = localStorage.getItem("selectedProductId");
-    const cfg = savedProduct && PRODUCT_CONFIGS[savedProduct] ? PRODUCT_CONFIGS[savedProduct] : PRODUCT_CONFIGS["oversized-unisex-tshirt"];
+    const cfg = savedProduct && PRODUCT_CONFIGS[savedProduct] ? PRODUCT_CONFIGS[savedProduct] : PRODUCT_CONFIGS["unisex-hoodie"];
     const savedColor = localStorage.getItem("selectedColor");
     return savedColor && cfg.colors.find(c => c.key === savedColor) ? savedColor : cfg.defaultColor;
   });
@@ -166,6 +166,8 @@ export default function App() {
   const [graphicsDrawerOpen, setGraphicsDrawerOpen] = useState(false);
   const [sizeDrawerOpen, setSizeDrawerOpen] = useState(false);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [cartCount, setCartCount] = useState(0);
+  const [toastVisible, setToastVisible] = useState(false);
   const [, setHandleTick] = useState(0);
   const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -901,8 +903,13 @@ export default function App() {
       <div style={{ background: "#fff", height: HEADER, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", flexShrink: 0, zIndex: 10 }}>
         <img src="/icons/Logo.svg" alt="Spreadshirt" style={{ height: 22, objectFit: "contain" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button type="button" style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex" }}>
+          <button type="button" style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex", position: "relative" }}>
             <img src="/icons/icon-cart.svg" alt="Cart" style={{ width: 24, height: 24 }} />
+            {cartCount > 0 && (
+              <span style={{ position: "absolute", top: 2, right: 2, width: 16, height: 16, borderRadius: "50%", background: "#16A34A", color: "#fff", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: '"Inter Variable", sans-serif' }}>
+                {cartCount}
+              </span>
+            )}
           </button>
           <button type="button" style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex" }}>
             <img src="/icons/icon-hamburger-menusvg.svg" alt="Menu" style={{ width: 24, height: 24 }} />
@@ -1544,11 +1551,7 @@ export default function App() {
           <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 20, paddingBottom: 40, outline: "none", fontFamily: '"Inter Variable", sans-serif' }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingLeft: 16, paddingRight: 16 }}>
               <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Print technique</span>
-              {printTechnique !== savedPrintTechnique ? (
-                <img src="/icons/icon-check.svg" alt="Save" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => { setSavedPrintTechnique(printTechnique); setPreviewDrawerOpen(false); }} />
-              ) : (
-                <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setPreviewDrawerOpen(false)} />
-              )}
+              <img src="/icons/icon-check.svg" alt="Save" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => { setSavedPrintTechnique(printTechnique); setPreviewDrawerOpen(false); }} />
             </div>
             <div style={{ display: "flex", paddingLeft: 16, paddingRight: 16, marginBottom: 16 }}>
               <div style={{ display: "flex", borderRadius: 999, background: "#f0f0f0", padding: 4, gap: 4, width: "100%" }}>
@@ -1561,9 +1564,6 @@ export default function App() {
                   Embroidery
                 </button>
               </div>
-            </div>
-            <div style={{ background: "#FEFCE8", padding: "10px 16px", margin: 12, display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 14, color: "#854D0E", lineHeight: 1.4 }}>We can stitch your design a bit smaller, like in the previews</span>
             </div>
             <div style={{ display: "flex", gap: 12, marginBottom: 20, overflowX: previewLoading ? "hidden" : "auto", paddingLeft: 16, paddingRight: 16, scrollbarWidth: "none" }}>
               {previewLoading ? (
@@ -1787,6 +1787,11 @@ export default function App() {
         unitPrice={currentPrice}
         outOfStock={selectedProduct.outOfStock[selectedColor] ?? []}
         sizes={selectedProduct.sizes}
+        onAddToCart={() => {
+          setCartCount(c => c + 1);
+          setToastVisible(true);
+          setTimeout(() => setToastVisible(false), 2500);
+        }}
       />
 
       <Drawer.Root open={allProductsDrawerOpen} onOpenChange={setAllProductsDrawerOpen}>
@@ -1836,6 +1841,21 @@ export default function App() {
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
+
+      {/* Toast */}
+      <div style={{
+        position: "fixed", bottom: 24, left: 16, right: 16,
+        transform: `translateY(${toastVisible ? 0 : 100}px)`,
+        transition: "transform 0.35s cubic-bezier(0.34,1.56,0.64,1)",
+        background: "#16A34A", color: "#fff", borderRadius: 8,
+        padding: "14px 20px", display: "flex", alignItems: "center", gap: 10,
+        fontSize: 14, fontWeight: 600, fontFamily: '"Inter Variable", sans-serif',
+        zIndex: 99999, pointerEvents: "none",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
+      }}>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 10.5L8.5 15L16 6" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        Added to cart
+      </div>
     </div>
   );
 }

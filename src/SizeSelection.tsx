@@ -11,9 +11,10 @@ interface Props {
   unitPrice: number;
   outOfStock?: string[];
   sizes?: readonly string[];
+  onAddToCart?: () => void;
 }
 
-export default function SizeSelection({ open, onOpenChange, quantities, setQuantities, unitPrice, outOfStock = [], sizes = DEFAULT_SIZES }: Props) {
+export default function SizeSelection({ open, onOpenChange, quantities, setQuantities, unitPrice, outOfStock = [], sizes = DEFAULT_SIZES, onAddToCart }: Props) {
   const totalQty = sizes.reduce((a, k) => a + (quantities[k] ?? 0), 0);
   const totalPrice = (totalQty * unitPrice).toFixed(2).replace(".", ",") + " €";
   const hasAny = totalQty > 0;
@@ -81,6 +82,8 @@ export default function SizeSelection({ open, onOpenChange, quantities, setQuant
             <div style={{ fontSize: 12, color: "#888", marginBottom: 16 }}>VAT included, excl. shipping</div>
             <button
               type="button"
+              disabled={!hasAny}
+              onClick={() => { if (!hasAny) return; onAddToCart?.(); onOpenChange(false); }}
               style={{ width: "100%", height: 52, borderRadius: 999, border: "none", background: hasAny ? "#111" : "#ccc", color: "#fff", fontSize: 16, fontWeight: 700, cursor: hasAny ? "pointer" : "default" }}
             >
               Add to cart
