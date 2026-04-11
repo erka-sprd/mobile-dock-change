@@ -637,7 +637,7 @@ export default function App() {
       const pa = currentPARef.current;
       if (!pa || designItems.length === 0) { resolve(""); return; }
 
-      const PAD = 4;
+      const PAD = 16;
       const OUTPUT = 600;
 
       // Preload all images first so naturalWidth/naturalHeight are available for bounding box
@@ -1605,8 +1605,8 @@ export default function App() {
                         {(() => {
                           const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
                           return previewUrl ? (
-                            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-                              <img src={previewUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+                            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <img src={previewUrl} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
                             </div>
                           ) : embroideryDataUrl && printTechnique === "embroidery" ? (
                             <span style={{ fontSize: 14, color: "#000", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)" }}>Processing…</span>
@@ -1622,7 +1622,7 @@ export default function App() {
                       const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
                       return previewUrl ? (
                         <div style={{ position: "absolute", top: "35%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
-                          <img src={previewUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none", mixBlendMode: "color-burn" } as React.CSSProperties} />
+                          <img src={previewUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
                         </div>
                       ) : null;
                     })()}
@@ -1720,7 +1720,11 @@ export default function App() {
               <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setGraphicsDrawerOpen(false)} />
             </div>
             <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
-              {Array.from({ length: 16 }, (_, i) => `/img/graphics/graphics${i + 1}.png`).map(src => (
+              {[
+                "/img/graphics/croco.png",
+                ...Array.from({ length: 16 }, (_, i) => `/img/graphics/graphics${i + 1}.png`),
+                ...Array.from({ length: 32 }, (_, i) => `/img/graphics/graphics${i + 17}.webp`),
+              ].map(src => (
                 <button
                   key={src}
                   type="button"
@@ -1732,7 +1736,7 @@ export default function App() {
                     padding: 12, overflow: "hidden",
                   }}
                 >
-                  <img src={src} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block", userSelect: "none" }} />
+                  <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", userSelect: "none" }} />
                 </button>
               ))}
             </div>
@@ -1792,7 +1796,7 @@ export default function App() {
             position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999,
             background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16,
             outline: "none", fontFamily: '"Inter Variable", sans-serif',
-            display: "flex", flexDirection: "column", height: 400,
+            display: "flex", flexDirection: "column", height: "calc(100dvh - 32px)",
           }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 16px" }}>
               <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>All products</span>
