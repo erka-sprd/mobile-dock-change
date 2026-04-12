@@ -5,7 +5,8 @@ import SizeSelection from "./SizeSelection";
 
 const BAR_BTN_INITIAL = 130;
 const BASE_PRODUCT_PRICE = 17.98;
-const DESIGN_SURCHARGE = 6; // € per design side — will vary by technique later
+const SURCHARGE_EMBROIDERY = 6;
+const SURCHARGE_STANDARD = 2;
 
 
 const HEADER = 56;
@@ -164,17 +165,30 @@ export default function App() {
   const [designDrawerOpen, setDesignDrawerOpen] = useState(false);
   const [textOptionsDrawerOpen, setTextOptionsDrawerOpen] = useState(false);
   const [graphicsDrawerOpen, setGraphicsDrawerOpen] = useState(false);
+  const graphicsScrollRef = useRef<HTMLDivElement>(null);
+  const graphicsScrollPos = useRef(0);
+  const textScrollRef = useRef<HTMLDivElement>(null);
+  const textScrollPos = useRef(0);
   const [sizeDrawerOpen, setSizeDrawerOpen] = useState(false);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [cartCount, setCartCount] = useState(0);
   const [toastVisible, setToastVisible] = useState(false);
   const [, setHandleTick] = useState(0);
   const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
+  const [modelPopupOpen, setModelPopupOpen] = useState(false);
+  const [modelPopupClosing, setModelPopupClosing] = useState(false);
+  const popupZoomRef = useRef(1);
+  const popupPanRef = useRef({ x: 0, y: 0 });
+  const popupGestureRef = useRef<{ initDist: number; initScale: number; startX: number; startY: number; initPanX: number; initPanY: number; } | null>(null);
+  const popupImgRef = useRef<HTMLDivElement>(null);
+  const [popupZoom, setPopupZoom] = useState(1);
+  const [popupPan, setPopupPan] = useState({ x: 0, y: 0 });
   const [previewLoading, setPreviewLoading] = useState(false);
   const [printTechnique, setPrintTechnique] = useState<"embroidery" | "standard">("embroidery");
   const [savedPrintTechnique, setSavedPrintTechnique] = useState<"embroidery" | "standard">("embroidery");
   const [embroideryDataUrl, setEmbroideryDataUrl] = useState<string | null>(null);
   const [embroideryRenderedUrl, setEmbroideryRenderedUrl] = useState<string | null>(null);
+  const [designBbox, setDesignBbox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   type DesignItem = { id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number; color?: string; };
   const [allDesignItems, setAllDesignItems] = useState<Record<string, DesignItem[]>>(() => {
     try {
@@ -193,7 +207,7 @@ export default function App() {
   };
 
   const designSidesCount = Object.keys(allDesignItems).filter(k => (allDesignItems[k] as DesignItem[]).length > 0).length;
-  const currentPrice = BASE_PRODUCT_PRICE + designSidesCount * DESIGN_SURCHARGE;
+  const currentPrice = BASE_PRODUCT_PRICE + designSidesCount * (savedPrintTechnique === "embroidery" ? SURCHARGE_EMBROIDERY : SURCHARGE_STANDARD);
 
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [designGestureActive, setDesignGestureActive] = useState(false);
@@ -584,25 +598,65 @@ export default function App() {
   useEffect(() => { currentPARef.current = currentPA; }, [currentPA]);
 
   const TEXT_OPTIONS = [
-    { content: "Team\nGreen",    color: "#81C784" }, // green
-    { content: "Happy\nbirthday", color: "#E57373" }, // red
-    { content: "Thank\nyou",     color: "#64B5F6" }, // blue
-    { content: "Merry\nXmas",   color: "#FFB74D" }, // orange
-    { content: "Love",           color: "#F06292" }, // pink
-    { content: "Best\nFriend",   color: "#4DB6AC" }, // teal
-    { content: "Free\nHugs",     color: "#BA68C8" }, // purple
-    { content: "Viva la\nvida",  color: "#FFD54F" }, // amber
-    { content: "Look\nat me",    color: "#4DD0E1" }, // cyan
-    { content: "Dance\nwith me", color: "#EF9A9A" }, // rose
-    { content: "Carpe\ndiem",    color: "#7986CB" }, // indigo
-    { content: "Tabula\nrasa",   color: "#AED581" }, // lime
-    { content: "Seize\nthe day", color: "#FF8A65" }, // deep orange
-    { content: "Good\nvibes",    color: "#80CBC4" }, // teal light
-    { content: "Stay\nwild",     color: "#CE93D8" }, // lavender
-    { content: "Be\nbold",       color: "#FFF176" }, // yellow
-    { content: "No\nregrets",    color: "#80DEEA" }, // light cyan
-    { content: "Keep\ngoing",    color: "#FFAB91" }, // peach
-  ];
+    { content: "Love",           color: "#F06292" },
+    { content: "So\ngood",        color: "#FFFFFF", stroke: "#D9D9D9" },
+    { content: "Rise\nup",       color: "#E53935" },
+    { content: "Team\nGreen",    color: "#81C784" },
+    { content: "You\ngot this",   color: "#FFFFF0", stroke: "#D9D9CC" },
+    { content: "Hustle",         color: "#FFA726" },
+    { content: "Let's\ngo",       color: "#F0F8FF", stroke: "#CCD3D9" },
+    { content: "Happy\nbirthday", color: "#E57373" },
+    { content: "Legend",         color: "#FF7043" },
+    { content: "Main\ncharacter", color: "#F5F5F5", stroke: "#D0D0D0" },
+    { content: "Carpe\ndiem",    color: "#7986CB" },
+    { content: "Merry\nXmas",   color: "#FFB74D" },
+    { content: "Vibes\nonly",     color: "#F8F8FF", stroke: "#D3D3E8" },
+    { content: "Squad",          color: "#AB47BC" },
+    { content: "Thank\nyou",     color: "#64B5F6" },
+    { content: "Born\nready",     color: "#F8F8F8", stroke: "#D3D3D3" },
+    { content: "Legends\nonly",  color: "#EF5350" },
+    { content: "Viva la\nvida",  color: "#FFD54F" },
+    { content: "Always\non",      color: "#FAF0E6", stroke: "#D5CCC4" },
+    { content: "Iconic",         color: "#7E57C2" },
+    { content: "Best\nFriend",   color: "#4DB6AC" },
+    { content: "That\ngirl",      color: "#EDEDED", stroke: "#C9C9C9" },
+    { content: "Dance\nwith me", color: "#EF9A9A" },
+    { content: "Brave",          color: "#42A5F5" },
+    { content: "Too\ncool",       color: "#FAFAF0", stroke: "#D5D5CC" },
+    { content: "Free\nHugs",     color: "#BA68C8" },
+    { content: "Dream\nbig",     color: "#43A047" },
+    { content: "Simply\nthe best",color: "#F0F0F0", stroke: "#CCCCCC" },
+    { content: "No\nregrets",    color: "#80DEEA" },
+    { content: "Fearless",       color: "#5C6BC0" },
+    { content: "Look\nat me",    color: "#4DD0E1" },
+    { content: "Made\nwith love",color: "#EC407A" },
+    { content: "Shine\non",      color: "#FFCA28" },
+    { content: "Tabula\nrasa",   color: "#AED581" },
+    { content: "Chill\nout",     color: "#29B6F6" },
+    { content: "Good\nvibes",    color: "#80CBC4" },
+    { content: "Wild\nheart",    color: "#F4511E" },
+    { content: "Keep\ngoing",    color: "#FFAB91" },
+    { content: "Born\nfree",     color: "#9CCC65" },
+    { content: "Stay\nwild",     color: "#CE93D8" },
+    { content: "Do it",          color: "#26C6DA" },
+    { content: "Seize\nthe day", color: "#FF8A65" },
+    { content: "Power",          color: "#E53935" },
+    { content: "Own it",         color: "#66BB6A" },
+    { content: "Glow\nup",       color: "#F48FB1" },
+    { content: "Namaste",        color: "#8D6E63" },
+    { content: "Be\nbold",       color: "#FFF176" },
+    { content: "Fresh",          color: "#26A69A" },
+    { content: "No\nlimits",     color: "#1E88E5" },
+    { content: "Rare",           color: "#EC407A" },
+    { content: "Good\nday",      color: "#D4E157" },
+    { content: "Fly\nhigh",      color: "#FFA000" },
+    { content: "Just\ngo",       color: "#26A69A" },
+    { content: "Cool\nkid",      color: "#00ACC1" },
+    { content: "Mellow",         color: "#A5D6A7" },
+    { content: "Pure\njoy",      color: "#F9A825" },
+    { content: "Classic",        color: "#795548" },
+    { content: "Unbeatable",     color: "#5E35B1" },
+  ] as { content: string; color: string; stroke?: string }[];
 
   const addTextItem = (content = "Team\nGreen", color = "#3F920C") => {
     const pa = currentPARef.current;
@@ -634,10 +688,11 @@ export default function App() {
     setDesignDrawerOpen(false);
   };
 
-  const flattenDesignItems = (): Promise<string> => {
+  type BboxResult = { dataUrl: string; bbox: { left: number; top: number; width: number; height: number } | null };
+  const flattenDesignItems = (): Promise<BboxResult> => {
     return new Promise((resolve) => {
       const pa = currentPARef.current;
-      if (!pa || designItems.length === 0) { resolve(""); return; }
+      if (!pa || designItems.length === 0) { resolve({ dataUrl: "", bbox: null }); return; }
 
       const PAD = 16;
       const OUTPUT = 600;
@@ -676,7 +731,7 @@ export default function App() {
           }
         }
 
-        if (!isFinite(minX)) { resolve(""); return; }
+        if (!isFinite(minX)) { resolve({ dataUrl: "", bbox: null }); return; }
 
         const cropW = (maxX - minX) + PAD * 2;
         const cropH = (maxY - minY) + PAD * 2;
@@ -692,7 +747,16 @@ export default function App() {
         ctx.translate(-offsetX, -offsetY);
 
         const renderNext = (index: number) => {
-          if (index >= designItems.length) { resolve(canvas.toDataURL("image/png")); return; }
+          if (index >= designItems.length) {
+              const bbox = {
+                left: offsetX / pa.width,
+                top: offsetY / pa.height,
+                width: cropW / pa.width,
+                height: cropH / pa.height,
+              };
+              resolve({ dataUrl: canvas.toDataURL("image/png"), bbox });
+              return;
+            }
           const item = designItems[index];
           if (item.type === "image" && item.src) {
             const img = loadedImgs.get(item.src)!;
@@ -876,6 +940,65 @@ export default function App() {
     setHandleTick(v => v + 1);
   }, [allDesignItems]);
 
+  useEffect(() => {
+    if (graphicsDrawerOpen) {
+      requestAnimationFrame(() => {
+        if (graphicsScrollRef.current) {
+          graphicsScrollRef.current.scrollTop = graphicsScrollPos.current;
+        }
+      });
+    }
+  }, [graphicsDrawerOpen]);
+
+  useEffect(() => {
+    if (textOptionsDrawerOpen) {
+      requestAnimationFrame(() => {
+        if (textScrollRef.current) {
+          textScrollRef.current.scrollTop = textScrollPos.current;
+        }
+      });
+    }
+  }, [textOptionsDrawerOpen]);
+
+  useEffect(() => {
+    const el = popupImgRef.current;
+    if (!el || !modelPopupOpen) return;
+    const onStart = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 2) {
+        const dx = e.touches[1].clientX - e.touches[0].clientX;
+        const dy = e.touches[1].clientY - e.touches[0].clientY;
+        popupGestureRef.current = { initDist: Math.hypot(dx, dy), initScale: popupZoomRef.current, startX: 0, startY: 0, initPanX: popupPanRef.current.x, initPanY: popupPanRef.current.y };
+      } else if (e.touches.length === 1 && popupZoomRef.current > 1) {
+        popupGestureRef.current = { initDist: 0, initScale: popupZoomRef.current, startX: e.touches[0].clientX, startY: e.touches[0].clientY, initPanX: popupPanRef.current.x, initPanY: popupPanRef.current.y };
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      e.preventDefault();
+      const g = popupGestureRef.current;
+      if (!g) return;
+      if (e.touches.length === 2 && g.initDist > 0) {
+        const dx = e.touches[1].clientX - e.touches[0].clientX;
+        const dy = e.touches[1].clientY - e.touches[0].clientY;
+        const s = Math.max(1, Math.min(5, g.initScale * (Math.hypot(dx, dy) / g.initDist)));
+        popupZoomRef.current = s;
+        setPopupZoom(s);
+      } else if (e.touches.length === 1 && popupZoomRef.current > 1) {
+        const p = { x: g.initPanX + e.touches[0].clientX - g.startX, y: g.initPanY + e.touches[0].clientY - g.startY };
+        popupPanRef.current = p;
+        setPopupPan(p);
+      }
+    };
+    const onEnd = () => {
+      if (popupZoomRef.current <= 1) { popupPanRef.current = { x: 0, y: 0 }; setPopupPan({ x: 0, y: 0 }); }
+      popupGestureRef.current = null;
+    };
+    el.addEventListener("touchstart", onStart, { passive: false });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    return () => { el.removeEventListener("touchstart", onStart); el.removeEventListener("touchmove", onMove); el.removeEventListener("touchend", onEnd); };
+  }, [modelPopupOpen]);
+
   return (
     <div
       style={{
@@ -972,7 +1095,7 @@ export default function App() {
                   opacity, visibility,
                   transform: `${transform} translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
                   zIndex,
-                  transition: "opacity 180ms ease-in-out",
+                  transition: "opacity 80ms cubic-bezier(0.4, 0, 0.2, 1)",
                   backfaceVisibility: "hidden",
                   WebkitBackfaceVisibility: "hidden",
                   willChange: "opacity, transform",
@@ -1204,13 +1327,17 @@ export default function App() {
 
         {/* Product view indicators */}
         <div style={{ position: "absolute", bottom: 88, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 16, pointerEvents: selectedDesignId ? "none" : "auto", zIndex: 10, opacity: selectedDesignId ? 0 : 1, transition: "opacity 0.18s ease" }}>
-          <button type="button" aria-label="Previous slide" onClick={() => goToSlide(index - 1)} style={{ background: "none", border: "none", fontSize: 28, cursor: "pointer", color: "#000", WebkitTextFillColor: "#000", WebkitAppearance: "none", appearance: "none", padding: 0, lineHeight: 1 }}>‹</button>
+          <button type="button" aria-label="Previous slide" onClick={() => goToSlide(index - 1)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <img src="/icons/icon-chevron-left.svg" alt="Previous" style={{ width: 24, height: 24 }} />
+          </button>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             {slides.map((_: { label: string; src: string }, i: number) => (
-              <button key={i} type="button" aria-label={slides[i].label} onClick={() => goToSlide(i)} style={{ width: 6, height: 6, borderRadius: "50%", background: i === index ? "#fff" : "#000", border: i === index ? "2px solid #000" : "none", cursor: "pointer", padding: 0, flexShrink: 0 }} />
+              <button key={i} type="button" aria-label={slides[i].label} onClick={() => goToSlide(i)} style={{ width: i === index ? 10 : 6, height: i === index ? 10 : 6, borderRadius: "50%", background: i === index ? "#fff" : "#000", border: i === index ? "2px solid #000" : "none", cursor: "pointer", padding: 0, flexShrink: 0, transition: "width 0.2s ease, height 0.2s ease" }} />
             ))}
           </div>
-          <button type="button" aria-label="Next slide" onClick={() => goToSlide(index + 1)} style={{ background: "none", border: "none", fontSize: 28, cursor: "pointer", color: "#000", WebkitTextFillColor: "#000", WebkitAppearance: "none", appearance: "none", padding: 0, lineHeight: 1 }}>›</button>
+          <button type="button" aria-label="Next slide" onClick={() => goToSlide(index + 1)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <img src="/icons/icon-chevron-right.svg" alt="Next" style={{ width: 24, height: 24 }} />
+          </button>
         </div>
 
         {/* Editor toolbar */}
@@ -1305,7 +1432,7 @@ export default function App() {
               <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
             </button>
             <div style={{ width: 1, alignSelf: "stretch", background: "#e1e1e1", flexShrink: 0 }} />
-            <button type="button" className="action-bar-btn" onClick={async () => { const url = await flattenDesignItems(); setEmbroideryDataUrl(url || null); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: "100%", padding: "2px 12px 2px 12px", border: "none", background: "transparent", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+            <button type="button" className="action-bar-btn" onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: "100%", padding: "2px 12px 2px 12px", border: "none", background: "transparent", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
               <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
               <span>Print</span>
               <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
@@ -1385,7 +1512,7 @@ export default function App() {
             fontFamily: '"MADEOuterSans", sans-serif',
           }}>
           <p style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 500, textAlign: "center", lineHeight: 1.3 }}>
-            <span className="onboarding-text-gradient">Start here to customize your product.</span>
+            <span style={{ color: "#111" }}>Design your </span><span style={{ textDecoration: "underline wavy", fontWeight: 900, color: "#FF3D2E" }}>embroidery</span><span style={{ color: "#111" }}> product!</span>
           </p>
           <div style={{
             overflow: "hidden",
@@ -1551,15 +1678,15 @@ export default function App() {
           <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 20, paddingBottom: 40, outline: "none", fontFamily: '"Inter Variable", sans-serif' }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingLeft: 16, paddingRight: 16 }}>
               <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Print technique</span>
-              <img src="/icons/icon-check.svg" alt="Save" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => { setSavedPrintTechnique(printTechnique); setPreviewDrawerOpen(false); }} />
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setPreviewDrawerOpen(false)} />
             </div>
             <div style={{ display: "flex", paddingLeft: 16, paddingRight: 16, marginBottom: 16 }}>
               <div style={{ display: "flex", borderRadius: 999, background: "#f0f0f0", padding: 4, gap: 4, width: "100%" }}>
-                <button type="button" onClick={() => setPrintTechnique("standard")} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "standard" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                <button type="button" onClick={() => { setPrintTechnique("standard"); setSavedPrintTechnique("standard"); }} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "standard" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                   <img src="/icons/icon-droplet.svg" width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
                   Standard print
                 </button>
-                <button type="button" onClick={() => setPrintTechnique("embroidery")} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "embroidery" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                <button type="button" onClick={() => { setPrintTechnique("embroidery"); setSavedPrintTechnique("embroidery"); }} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "embroidery" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                   <img src="/icons/icon-needle-embroidery.svg" width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
                   Embroidery
                 </button>
@@ -1616,15 +1743,27 @@ export default function App() {
                     );
                   })()}
                   {/* 2 — model front */}
+                  {/* <div onClick={() => { setModelPopupOpen(true); popupZoomRef.current = 1; popupPanRef.current = { x: 0, y: 0 }; setPopupZoom(1); setPopupPan({ x: 0, y: 0 }); }} style={{ ... popup trigger ... }} /> */}
                   <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
                     <img src={selectedProductId === "oversized-unisex-tshirt" ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp` : selectedProduct.thumbnail(selectedColor)} alt="Model Front" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
                     {(() => {
                       const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
-                      return previewUrl ? (
-                        <div style={{ position: "absolute", top: "35%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
-                          <img src={previewUrl} style={{ maxWidth: "25%", maxHeight: 60, display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                      if (!previewUrl) return null;
+                      const cardW = 310, cardH = 245;
+                      const pa = selectedProduct.printAreas["Front"];
+                      const paLeft = pa.x * cardW;
+                      const paTop = pa.y * cardH;
+                      const paW = pa.w * cardW;
+                      const paH = pa.h * cardH;
+                      const left   = designBbox ? paLeft + designBbox.left  * paW : paLeft;
+                      const top    = designBbox ? paTop  + designBbox.top   * paH : paTop;
+                      const width  = designBbox ? designBbox.width  * paW : paW;
+                      const height = designBbox ? designBbox.height * paH : paH;
+                      return (
+                        <div style={{ position: "absolute", left, top, width, height, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <img src={previewUrl} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
                         </div>
-                      ) : null;
+                      );
                     })()}
                   </div>
                 </>
@@ -1676,8 +1815,8 @@ export default function App() {
               <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Choose text</span>
               <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setTextOptionsDrawerOpen(false)} />
             </div>
-            <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
-              {TEXT_OPTIONS.map(({ content, color }) => (
+            <div ref={textScrollRef} onScroll={e => { textScrollPos.current = (e.currentTarget as HTMLDivElement).scrollTop; }} style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
+              {TEXT_OPTIONS.map(({ content, color, stroke }) => (
                 <button
                   key={content}
                   type="button"
@@ -1697,6 +1836,7 @@ export default function App() {
                     whiteSpace: "pre-line",
                     textAlign: "center",
                     userSelect: "none",
+                    ...(stroke ? { WebkitTextStroke: `1px ${stroke}` } : {}),
                   }}>{content}</span>
                 </button>
               ))}
@@ -1719,7 +1859,7 @@ export default function App() {
               <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Choose graphic</span>
               <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setGraphicsDrawerOpen(false)} />
             </div>
-            <div style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
+            <div ref={graphicsScrollRef} onScroll={e => { graphicsScrollPos.current = (e.currentTarget as HTMLDivElement).scrollTop; }} style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
               {[
                 "/img/graphics/croco.png",
                 ...Array.from({ length: 16 }, (_, i) => `/img/graphics/graphics${i + 1}.png`),
@@ -1856,6 +1996,40 @@ export default function App() {
         <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 10.5L8.5 15L16 6" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
         Added to cart
       </div>
+
+      {modelPopupOpen && (() => {
+        const modelSrc = selectedProductId === "oversized-unisex-tshirt"
+          ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp`
+          : selectedProduct.thumbnail(selectedColor);
+        const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
+        return (
+          <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()} onPointerUp={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()} className={modelPopupClosing ? "popup-dismiss" : "popup-reveal"} style={{ position: "fixed", inset: 0, zIndex: 100000, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "all" }}>
+            {/* Image container — zooms and clips */}
+            <div
+              ref={popupImgRef}
+              style={{ position: "absolute", inset: 0, overflow: "hidden", touchAction: "none" }}
+            >
+              <div style={{ width: "100%", height: "100%", transform: `scale(${popupZoom}) translate(${popupPan.x / popupZoom}px, ${popupPan.y / popupZoom}px)`, transformOrigin: "center center" }}>
+                <img src={modelSrc} alt="Model" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                {previewUrl && (
+                  <div style={{ position: "absolute", top: "35%", left: 0, right: 0, display: "flex", justifyContent: "center" }}>
+                    <img src={previewUrl} style={{ maxWidth: "25%", display: "block", objectFit: "contain" }} />
+                  </div>
+                )}
+              </div>
+            </div>
+            {/* X button — fixed, outside zoom container */}
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); setModelPopupClosing(true); setTimeout(() => { setModelPopupOpen(false); setModelPopupClosing(false); }, 300); }}
+              style={{ position: "absolute", top: 20, right: 16, width: 36, height: 36, borderRadius: "50%", background: "#fff", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px rgba(0,0,0,0.3)", zIndex: 1 }}
+            >
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 20, height: 20 }} />
+            </button>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }

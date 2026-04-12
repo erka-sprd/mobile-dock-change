@@ -1,15 +1,15 @@
 import React, { useEffect, useRef } from "react";
 
 const SETTINGS = {
-  quantStep: 50,
+  quantStep: 1,
   stitchDensity: 0,
-  stitchLength: 15,
-  stitchVisibility: 250,
-  edgeCleanliness: 5,
-  edgeShadow: 50,
-  embossStrength: 280,
-  embossThickness: 4,
-  shineAmount: 1,
+  stitchLength: 20,
+  stitchVisibility: 280,
+  edgeCleanliness: 0,
+  edgeShadow: 40,
+  embossStrength: 500,
+  embossThickness: 5,
+  shineAmount: 0,
 };
 
 function clamp(v: number, min: number, max: number) {

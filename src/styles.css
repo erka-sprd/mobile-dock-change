@@ -43,3 +43,22 @@
   transition: background 0.05s ease !important;
 }
 
+@keyframes popupReveal {
+  0%   { transform: scale(0);    filter: blur(20px); opacity: 0; }
+  70%  { transform: scale(1.04); filter: blur(0px);  opacity: 1; }
+  100% { transform: scale(1);    filter: blur(0px);  opacity: 1; }
+}
+
+@keyframes popupDismiss {
+  0%   { transform: scale(1);    filter: blur(0px);  opacity: 1; }
+  100% { transform: scale(0);    filter: blur(20px); opacity: 0; }
+}
+
+.popup-reveal {
+  animation: popupReveal 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.popup-dismiss {
+  animation: popupDismiss 0.3s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
