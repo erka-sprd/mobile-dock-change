@@ -1672,16 +1672,63 @@ export default function App() {
                 {/* Accordion — product details, size & fit, reviews */}
                 <div style={{ border: `1px solid rgba(190,190,190,${interp})`, borderRadius: 12, overflow: "hidden", margin: "16px 20px 8px" }}>
                   {[
-                    { key: "product-details", label: "Product details", content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua." },
-                    { key: "size-fit", label: "Size & fit", content: "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat." },
-                    { key: "product-views", label: "Product views", extra: (
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                        {[1,2,3,4].map(i => <svg key={i} width="18" height="18" viewBox="0 0 24 24" fill="#EA580C"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>)}
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EA580C" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-                        <span style={{ fontSize: 14, color: "#111" }}>4.5 (128 reviews)</span>
-                      </div>
-                    ), content: "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur." },
-                  ].map(({ key, label, content, extra }: { key: string; label: string; content: string; extra?: React.ReactNode }, i) => (
+                    {
+                      key: "product-details",
+                      label: "Product details",
+                      content: (
+                        <div style={{ padding: "0 16px 16px", fontSize: 14, color: "#555", lineHeight: 1.7 }}>
+                          <p style={{ margin: "0 0 10px" }}>Made from 100% organic ring-spun cotton, this oversized unisex tee offers a relaxed, modern fit with a dropped shoulder and slightly elongated body.</p>
+                          <p style={{ margin: 0 }}>Pre-shrunk fabric ensures a consistent fit after washing. Printed using water-based inks for a soft feel that lasts. GOTS certified and produced under fair working conditions.</p>
+                        </div>
+                      ),
+                    },
+                    {
+                      key: "size-fit",
+                      label: "Size & fit",
+                      content: (
+                        <div style={{ padding: "0 16px 16px", fontSize: 14, color: "#555", lineHeight: 1.7 }}>
+                          <p style={{ margin: "0 0 10px" }}>Oversized fit — we recommend sizing down one size if you prefer a more regular look. The dropped shoulders and wide body give it a relaxed, streetwear-inspired silhouette.</p>
+                          <p style={{ margin: 0 }}>Model is 188 cm and wears size M. Chest width at M: 58 cm. Body length at M: 74 cm.</p>
+                        </div>
+                      ),
+                    },
+                    {
+                      key: "product-views",
+                      label: "Reviews",
+                      extra: (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                          {[1,2,3,4].map(i => <svg key={i} width="16" height="16" viewBox="0 0 24 24" fill="#EA580C"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>)}
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#EA580C" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                          <span style={{ fontSize: 13, color: "#555" }}>4.5 · 128 reviews</span>
+                        </div>
+                      ),
+                      content: (
+                        <div style={{ padding: "0 16px 16px" }}>
+                          {[
+                            { name: "Jonas M.", stars: 5, text: "Super comfortable and the print quality is excellent. Washed it 10 times and it still looks great." },
+                            { name: "Sarah K.", stars: 5, text: "Fits exactly as described. Went one size down and it's perfect. Really happy with the material." },
+                            { name: "Luca B.", stars: 4, text: "Great shirt overall. The oversized fit is very on-trend. Delivery was fast too." },
+                            { name: "Emma R.", stars: 5, text: "Bought this as a gift and the person loved it. The custom print came out beautifully." },
+                            { name: "Tobias H.", stars: 4, text: "Good quality for the price. Fabric feels premium, colours are vibrant. Would order again." },
+                          ].map(({ name, stars, text }, i, arr) => (
+                            <div key={name}>
+                              <div style={{ paddingTop: 12, paddingBottom: 12 }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{name}</span>
+                                  <div style={{ display: "flex", gap: 2 }}>
+                                    {Array.from({ length: stars }).map((_, s) => <svg key={s} width="13" height="13" viewBox="0 0 24 24" fill="#EA580C"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>)}
+                                  </div>
+                                </div>
+                                <p style={{ margin: 0, fontSize: 13, color: "#555", lineHeight: 1.6 }}>{text}</p>
+                              </div>
+                              {i < arr.length - 1 && <div style={{ height: 1, background: "#f0f0f0" }} />}
+                            </div>
+                          ))}
+                          <button type="button" style={{ marginTop: 12, background: "none", border: "none", padding: 0, fontSize: 13, color: "#111", textDecoration: "underline", cursor: "pointer" }}>See more</button>
+                        </div>
+                      ),
+                    },
+                  ].map(({ key, label, content, extra }: { key: string; label: string; content: React.ReactNode; extra?: React.ReactNode }, i) => (
                     <div key={key} style={{ borderTop: i === 0 ? "none" : `1px solid rgba(190,190,190,${interp})` }}>
                       <button
                         type="button"
@@ -1694,8 +1741,8 @@ export default function App() {
                         </div>
                         <img src="/icons/icon-chevron-down.svg" alt="" style={{ width: 20, height: 20, filter: "invert(20%)", flexShrink: 0, transition: "transform 0.2s", transform: openAccordions.has(key) ? "rotate(180deg)" : "none" }} />
                       </button>
-                      <div style={{ overflow: "hidden", maxHeight: openAccordions.has(key) ? 200 : 0, transition: "max-height 0.3s cubic-bezier(0.16,1,0.3,1)" }}>
-                        <p style={{ margin: "0 16px 16px", fontSize: 14, color: "#555", lineHeight: 1.6 }}>{content}</p>
+                      <div style={{ overflow: "hidden", maxHeight: openAccordions.has(key) ? 600 : 0, transition: "max-height 0.4s cubic-bezier(0.16,1,0.3,1)" }}>
+                        {content}
                       </div>
                     </div>
                   ))}
