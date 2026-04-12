@@ -84,7 +84,7 @@ export default function SizeSelection({ open, onOpenChange, quantities, setQuant
               type="button"
               disabled={!hasAny}
               onClick={() => { if (!hasAny) return; onAddToCart?.(); onOpenChange(false); }}
-              style={{ width: "100%", height: 52, borderRadius: 999, border: "none", background: hasAny ? "#111" : "#ccc", color: "#fff", fontSize: 16, fontWeight: 700, cursor: hasAny ? "pointer" : "default" }}
+              style={{ width: "100%", height: 52, borderRadius: 12, border: "none", background: hasAny ? "#111" : "#ccc", color: "#fff", fontSize: 16, fontWeight: 700, cursor: hasAny ? "pointer" : "default" }}
             >
               Add to cart
             </button>

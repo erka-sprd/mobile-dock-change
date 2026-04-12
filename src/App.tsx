@@ -3,7 +3,6 @@ import { Drawer } from "vaul";
 import EmbroideryPreview from "./EmbroideryPreview";
 import SizeSelection from "./SizeSelection";
 
-const BAR_BTN_INITIAL = 130;
 const BASE_PRODUCT_PRICE = 17.98;
 const SURCHARGE_EMBROIDERY = 6;
 const SURCHARGE_STANDARD = 2;
@@ -155,9 +154,32 @@ export default function App() {
 
   const horizontalGesture = useRef({ startX: 0, startY: 0, locked: false });
   const barScrollRef = useRef<HTMLDivElement>(null);
+  const addDesignBtnRef = useRef<HTMLButtonElement>(null);
+  const addDesignExpandedWidth = useRef<number | null>(null);
+  const addDesignCurrentWidth = useRef<number | null>(null);
+  const addDesignAnimRef = useRef<number | null>(null);
+  const isBarCompactRef = useRef(false);
+  const isBarAnimatingRef = useRef(false);
+  const COMPACT_WIDTH = 54;
+  const ANIM_DURATION = 500;
 
-  const [barScrollProgress, setBarScrollProgress] = useState(0);
+  // Checkout drawer state
+  const DRAWER_MIN = 70;
+  const [checkoutDrawerHeight, setCheckoutDrawerHeight] = useState(DRAWER_MIN);
+  const [checkoutDrawerMaxH, setCheckoutDrawerMaxH] = useState(DRAWER_MIN);
+  const [checkoutDrawerExpanded, setCheckoutDrawerExpanded] = useState(false);
+  const [checkoutDrawerDragging, setCheckoutDrawerDragging] = useState(false);
+  const checkoutDrawerRef = useRef<HTMLDivElement>(null);
+  const checkoutDrawerScrollRef = useRef<HTMLDivElement>(null);
+  const checkoutDrawerHandlePathRef = useRef<SVGPathElement>(null);
+  const checkoutDrawerHandleSvgRef = useRef<SVGSVGElement>(null);
+  const checkoutDrawerDrag = useRef({ startY: 0, startH: DRAWER_MIN, active: false });
+  const checkoutDrawerDragDirection = useRef<"up" | "down" | "none">("none");
+  const checkoutDrawerChevronState = useRef({ bend: 0, gray: 0.8, scale: 1, rafId: 0 });
+  const checkoutDrawerScrollGesture = useRef({ startY: 0, startScrollTop: 0, draggingSheet: false, lockedAtTop: false });
+
   const [scrollAtEnd, setScrollAtEnd] = useState(false);
+  const [barScrollProgress, setBarScrollProgress] = useState(0);
   const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
   const [allProductsDrawerOpen, setAllProductsDrawerOpen] = useState(false);
   const [colorDrawerScrolled, setColorDrawerScrolled] = useState(false);
@@ -218,6 +240,7 @@ export default function App() {
   const [showDesignRow, setShowDesignRow] = useState(false);
   const [animating, setAnimating] = useState(false);
   const [revealed, setRevealed] = useState(hasAnyItems);
+  const [slidePopoverOpen, setSlidePopoverOpen] = useState(false);
 
   const dismissPopup = () => {
     setShowPopup(false);
@@ -226,13 +249,6 @@ export default function App() {
     requestAnimationFrame(() => requestAnimationFrame(() => setRevealed(true)));
   };
 
-  const blackBtnRef = useRef<HTMLButtonElement>(null);
-  const blackBtnExpandedWidth = useRef<number | null>(null);
-  const blackBtnAnimRef = useRef<number | null>(null);
-
-  const blackBtnCurrentWidth = useRef<number | null>(null);
-  const isCompactRef = useRef(false);
-  const isAnimatingRef = useRef(false);
   const currentPARef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
   const itemSizeRefs = useRef<Map<string, { w: number; h: number }>>(new Map());
   const itemElRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -244,89 +260,171 @@ export default function App() {
     | { type: "resize-tl" | "resize-tr" | "resize-bl" | "resize-br"; itemId: string; startTx: number; startTy: number; startX: number; startY: number; startW: number; startH: number; startFontSize: number; anchorX: number; anchorY: number; startDist: number; anchorLocalX: number; anchorLocalY: number; }
   >({ type: "idle" });
 
-  const COMPACT_WIDTH = 46;
-  const ANIM_DURATION = 500;
-
-  // Elastic out spring — overshoots then settles (for button width only)
-  const spring = (t: number) => {
-    if (t === 0) return 0;
-    if (t === 1) return 1;
-    const p = 0.35;
-    return Math.pow(2, -10 * t) * Math.sin((t - p / 4) * (2 * Math.PI) / p) + 1;
-  };
-
-  // Smooth ease-out (for padding, no overshoot)
-  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
-
-  const animateBtnWidth = (fromWidth: number, toWidth: number, useSpring = true) => {
-    const btn = blackBtnRef.current;
-    const scroll = barScrollRef.current;
-    if (!btn || !scroll) return;
-    if (blackBtnAnimRef.current !== null) cancelAnimationFrame(blackBtnAnimRef.current);
-    isAnimatingRef.current = true;
-    const start = performance.now();
-    const tick = (now: number) => {
-      const t = Math.min((now - start) / ANIM_DURATION, 1);
-      const w = fromWidth + (toWidth - fromWidth) * (useSpring ? spring(t) : easeOut(t));
-      const paddingW = fromWidth + (toWidth - fromWidth) * easeOut(t);
-      btn.style.width = `${w}px`;
-      blackBtnCurrentWidth.current = w;
-      scroll.style.paddingLeft = `${16 + paddingW + 8}px`;
-      if (t < 1) {
-        blackBtnAnimRef.current = requestAnimationFrame(tick);
-      } else {
-        blackBtnAnimRef.current = null;
-        isAnimatingRef.current = false;
-      }
-    };
-    blackBtnAnimRef.current = requestAnimationFrame(tick);
-  };
-
   const handleBarScroll = () => {
     const el = barScrollRef.current;
     if (!el) return;
     const max = el.scrollWidth - el.clientWidth;
     const progress = max > 0 ? el.scrollLeft / max : 0;
-    setBarScrollProgress(progress);
     setScrollAtEnd(max <= 0 || el.scrollLeft >= max - 4);
-
-    if (isAnimatingRef.current) return;
-
-    const btn = blackBtnRef.current;
+    setBarScrollProgress(progress);
+    if (isBarAnimatingRef.current) return;
+    const btn = addDesignBtnRef.current;
     if (!btn) return;
-
     const shouldBeCompact = progress > 0;
-    if (shouldBeCompact === isCompactRef.current) return;
-    isCompactRef.current = shouldBeCompact;
-
+    if (shouldBeCompact === isBarCompactRef.current) return;
+    isBarCompactRef.current = shouldBeCompact;
     if (shouldBeCompact) {
-      blackBtnExpandedWidth.current = btn.offsetWidth;
-      animateBtnWidth(btn.offsetWidth, COMPACT_WIDTH);
+      addDesignExpandedWidth.current = btn.offsetWidth;
+      animateAddDesignWidth(btn.offsetWidth, COMPACT_WIDTH);
     } else {
-      const expandedWidth = blackBtnExpandedWidth.current ?? btn.offsetWidth;
-      animateBtnWidth(blackBtnCurrentWidth.current ?? COMPACT_WIDTH, expandedWidth, false);
+      const expandedWidth = addDesignExpandedWidth.current ?? btn.offsetWidth;
+      animateAddDesignWidth(addDesignCurrentWidth.current ?? COMPACT_WIDTH, expandedWidth);
     }
   };
 
+  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+
+  const animateAddDesignWidth = (fromWidth: number, toWidth: number) => {
+    const btn = addDesignBtnRef.current;
+    const scroll = barScrollRef.current;
+    if (!btn || !scroll) return;
+    if (addDesignAnimRef.current !== null) cancelAnimationFrame(addDesignAnimRef.current);
+    isBarAnimatingRef.current = true;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / ANIM_DURATION, 1);
+      const w = fromWidth + (toWidth - fromWidth) * easeOut(t);
+      btn.style.width = `${w}px`;
+      addDesignCurrentWidth.current = w;
+      scroll.style.paddingLeft = `${16 + w + 8}px`;
+      if (t < 1) {
+        addDesignAnimRef.current = requestAnimationFrame(tick);
+      } else {
+        addDesignAnimRef.current = null;
+        isBarAnimatingRef.current = false;
+      }
+    };
+    addDesignAnimRef.current = requestAnimationFrame(tick);
+  };
+
+  // Set initial paddingLeft of scroll bar based on Add design button width
   useEffect(() => {
-    const btn = blackBtnRef.current;
+    const btn = addDesignBtnRef.current;
     const scroll = barScrollRef.current;
     if (!btn || !scroll) return;
     const w = btn.offsetWidth;
-    blackBtnExpandedWidth.current = w;
-    blackBtnCurrentWidth.current = w;
+    addDesignCurrentWidth.current = w;
+    addDesignExpandedWidth.current = w;
     scroll.style.paddingLeft = `${16 + w + 8}px`;
-
-    const ro = new ResizeObserver(() => {
-      if (isAnimatingRef.current || isCompactRef.current) return;
-      const newW = btn.offsetWidth;
-      blackBtnExpandedWidth.current = newW;
-      blackBtnCurrentWidth.current = newW;
-      scroll.style.paddingLeft = `${16 + newW + 8}px`;
-    });
-    ro.observe(btn);
-    return () => ro.disconnect();
   }, []);
+
+  // Checkout drawer max height
+  useEffect(() => {
+    const update = () => {
+      const next = 400;
+      setCheckoutDrawerMaxH(next);
+      setCheckoutDrawerHeight(prev => Math.min(Math.max(DRAWER_MIN, prev), next));
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  // Checkout drawer handle chevron animation
+  useEffect(() => {
+    const cs = checkoutDrawerChevronState.current;
+    const animate = () => {
+      const targetBend = checkoutDrawerDragging
+        ? checkoutDrawerDragDirection.current === "up" ? -3 : checkoutDrawerDragDirection.current === "down" ? 3 : 0
+        : 0;
+      const targetGray = checkoutDrawerDragging ? 0 : 0.8;
+      const targetScale = checkoutDrawerDragging ? 2 : 1;
+      cs.bend += (targetBend - cs.bend) * 0.12;
+      cs.gray += (targetGray - cs.gray) * 0.1;
+      cs.scale += (targetScale - cs.scale) * 0.1;
+      if (checkoutDrawerHandlePathRef.current) {
+        const g = Math.round(cs.gray * 255);
+        checkoutDrawerHandlePathRef.current.setAttribute("d", `M0,2 Q18,${(2 + cs.bend).toFixed(2)} 36,2`);
+        checkoutDrawerHandlePathRef.current.setAttribute("stroke", `rgb(${g},${g},${g})`);
+      }
+      if (checkoutDrawerHandleSvgRef.current) {
+        checkoutDrawerHandleSvgRef.current.style.transform = `scale(${cs.scale.toFixed(3)}, 1)`;
+      }
+      if (Math.abs(targetBend - cs.bend) > 0.02 || Math.abs(targetGray - cs.gray) > 0.005 || Math.abs(targetScale - cs.scale) > 0.005) {
+        cs.rafId = requestAnimationFrame(animate);
+      } else {
+        if (checkoutDrawerHandlePathRef.current) {
+          checkoutDrawerHandlePathRef.current.setAttribute("d", `M0,2 Q18,${(2 + targetBend).toFixed(2)} 36,2`);
+          checkoutDrawerHandlePathRef.current.setAttribute("stroke", `rgb(${Math.round(targetGray * 255)},${Math.round(targetGray * 255)},${Math.round(targetGray * 255)})`);
+        }
+        if (checkoutDrawerHandleSvgRef.current) checkoutDrawerHandleSvgRef.current.style.transform = `scale(${targetScale}, 1)`;
+      }
+    };
+    cs.rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(cs.rafId);
+  }, [checkoutDrawerDragging]);
+
+  // Checkout drawer drag handlers
+  const checkoutDrawerStart = (y: number) => {
+    checkoutDrawerDrag.current = { startY: y, startH: checkoutDrawerRef.current?.offsetHeight || DRAWER_MIN, active: false };
+    setCheckoutDrawerDragging(false);
+  };
+  const checkoutDrawerMove = (y: number) => {
+    const d = checkoutDrawerDrag.current;
+    const dy = d.startY - y;
+    if (!d.active && Math.abs(dy) > THRESHOLD) { d.active = true; setCheckoutDrawerDragging(true); }
+    if (!d.active) return;
+    checkoutDrawerDragDirection.current = dy > 0 ? "up" : "down";
+    setCheckoutDrawerHeight(Math.min(checkoutDrawerMaxH, Math.max(DRAWER_MIN, d.startH + dy)));
+  };
+  const checkoutDrawerEnd = (y: number) => {
+    const d = checkoutDrawerDrag.current;
+    if (!d.active) return;
+    const dy = d.startY - y;
+    const midpoint = DRAWER_MIN + (checkoutDrawerMaxH - DRAWER_MIN) / 2;
+    const next = dy > THRESHOLD ? true : dy < -THRESHOLD ? false : checkoutDrawerHeight > midpoint;
+    setCheckoutDrawerExpanded(next);
+    setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
+    setCheckoutDrawerDragging(false);
+    checkoutDrawerDragDirection.current = "none";
+    d.active = false;
+  };
+
+  const onCheckoutDrawerHandleMouseDown = (e: React.MouseEvent) => {
+    checkoutDrawerStart(e.clientY);
+    const mm = (ev: MouseEvent) => checkoutDrawerMove(ev.clientY);
+    const mu = (ev: MouseEvent) => { checkoutDrawerEnd(ev.clientY); window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu); };
+    window.addEventListener("mousemove", mm);
+    window.addEventListener("mouseup", mu);
+  };
+
+  const onCheckoutDrawerScrollTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const scrollTop = checkoutDrawerScrollRef.current?.scrollTop || 0;
+    checkoutDrawerScrollGesture.current = { startY: e.touches[0].clientY, startScrollTop: scrollTop, draggingSheet: false, lockedAtTop: checkoutDrawerExpanded && scrollTop <= 0 };
+    if (!checkoutDrawerExpanded) { checkoutDrawerStart(e.touches[0].clientY); checkoutDrawerScrollGesture.current.draggingSheet = true; }
+  };
+  const onCheckoutDrawerScrollTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const scrollEl = checkoutDrawerScrollRef.current;
+    if (!scrollEl) return;
+    const currentY = e.touches[0].clientY;
+    const deltaY = currentY - checkoutDrawerScrollGesture.current.startY;
+    const atTop = scrollEl.scrollTop <= 0;
+    if (checkoutDrawerExpanded && atTop) scrollEl.scrollTop = 0;
+    if (!checkoutDrawerScrollGesture.current.draggingSheet) {
+      const shouldDrag = !checkoutDrawerExpanded || ((checkoutDrawerScrollGesture.current.lockedAtTop || checkoutDrawerScrollGesture.current.startScrollTop <= 0) && atTop && deltaY > THRESHOLD);
+      if (shouldDrag) { e.preventDefault(); scrollEl.scrollTop = 0; checkoutDrawerStart(checkoutDrawerScrollGesture.current.startY); checkoutDrawerScrollGesture.current.draggingSheet = true; }
+    }
+    if (checkoutDrawerScrollGesture.current.draggingSheet) { e.preventDefault(); scrollEl.scrollTop = 0; checkoutDrawerMove(currentY); }
+  };
+  const onCheckoutDrawerScrollTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (checkoutDrawerScrollGesture.current.draggingSheet) checkoutDrawerEnd(e.changedTouches[0].clientY);
+    checkoutDrawerScrollGesture.current.draggingSheet = false;
+    checkoutDrawerScrollGesture.current.lockedAtTop = false;
+  };
+
+  const checkoutDrawerShadow = checkoutDrawerExpanded
+    ? "0 -20px 80px rgba(0,0,0,0.32), 0 -4px 24px rgba(0,0,0,0.10)"
+    : "0 -50px 60px rgba(0,0,0,0.12), 0 -4px 20px rgba(0,0,0,0.09)";
 
   const imageGesture = useRef({
     mode: "idle" as "idle" | "pinch" | "pan",
@@ -583,16 +681,6 @@ export default function App() {
     };
   }, [editorSize, activeIndex, imageNaturalSize, selectedColor]);
 
-  const paCenterZoomed = useMemo(() => {
-    if (!currentPA) return { x: 0, y: 0 };
-    const cx = currentPA.left + currentPA.width / 2;
-    const cy = currentPA.top + currentPA.height / 2;
-    const zoomCy = (editorSize.height - EDITOR_BOTTOM_OFFSET) / 2;
-    return {
-      x: zoom <= 1 ? cx : (cx - editorSize.width / 2) * zoom + editorSize.width / 2 + pan.x,
-      y: zoom <= 1 ? cy : (cy - zoomCy) * zoom + zoomCy + pan.y,
-    };
-  }, [currentPA, zoom, pan, editorSize]);
 
 
   useEffect(() => { currentPARef.current = currentPA; }, [currentPA]);
@@ -1293,52 +1381,8 @@ export default function App() {
           )}
 
 
-          {/* Print-area centered + button — shown when other sides have items but this one is empty */}
-          {!showPopup && currentPA && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setDesignDrawerOpen(true); }}
-              style={{
-                position: "absolute",
-                left: paCenterZoomed.x,
-                top: paCenterZoomed.y,
-                transform: activeIsEmpty && phase !== "out" ? "translate(-50%, -50%) scale(1)" : "translate(-50%, -50%) scale(0)",
-                opacity: activeIsEmpty && phase !== "out" ? 1 : 0,
-                filter: activeIsEmpty && phase !== "out" ? "blur(0px)" : "blur(8px)",
-                pointerEvents: activeIsEmpty && phase !== "out" ? "all" : "none",
-                transition: phase === "out" ? "opacity 180ms ease-in-out, transform 180ms ease-in-out, filter 180ms ease-in-out" : "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 80ms, opacity 0.3s ease 80ms, filter 0.3s ease 80ms",
-                width: 56, height: 56,
-                borderRadius: 999,
-                border: "none",
-                background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
-                boxShadow: "0 4px 14px 0 rgba(0,0,0,0.25)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                cursor: "pointer",
-                zIndex: 20,
-              }}
-            >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
-                style={{ transition: "transform 0.4s cubic-bezier(0.34,1.4,0.64,1)" }}>
-                <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-              </svg>
-            </button>
-          )}
         </div>
 
-        {/* Product view indicators */}
-        <div style={{ position: "absolute", bottom: 88, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 16, pointerEvents: selectedDesignId ? "none" : "auto", zIndex: 10, opacity: selectedDesignId ? 0 : 1, transition: "opacity 0.18s ease" }}>
-          <button type="button" aria-label="Previous slide" onClick={() => goToSlide(index - 1)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <img src="/icons/icon-chevron-left.svg" alt="Previous" style={{ width: 24, height: 24 }} />
-          </button>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            {slides.map((_: { label: string; src: string }, i: number) => (
-              <button key={i} type="button" aria-label={slides[i].label} onClick={() => goToSlide(i)} style={{ width: i === index ? 10 : 6, height: i === index ? 10 : 6, borderRadius: "50%", background: i === index ? "#fff" : "#000", border: i === index ? "2px solid #000" : "none", cursor: "pointer", padding: 0, flexShrink: 0, transition: "width 0.2s ease, height 0.2s ease" }} />
-            ))}
-          </div>
-          <button type="button" aria-label="Next slide" onClick={() => goToSlide(index + 1)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <img src="/icons/icon-chevron-right.svg" alt="Next" style={{ width: 24, height: 24 }} />
-          </button>
-        </div>
 
         {/* Editor toolbar */}
         <div style={{ position: "absolute", top: 12, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", pointerEvents: "auto", zIndex: 10 }}>
@@ -1351,7 +1395,7 @@ export default function App() {
             </button>
           </div>
           <button type="button" style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-            <img src="/icons/icon-dots-horizontal.svg" alt="More" style={{ width: 20, height: 20 }} />
+            <img src="/icons/icon-dots-horizontal.svg" width={20} height={20} alt="More" />
           </button>
         </div>
 
@@ -1365,8 +1409,6 @@ export default function App() {
 
 
 
-      {/* Bottom gradient backdrop */}
-      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 150, background: "linear-gradient(to top, rgba(0,0,0,0.07) 0%, rgba(242,242,242,0.07) 100%)", zIndex: 1, pointerEvents: "none" }} />
 
       {/* Done button — visible when a design object is selected */}
       <div style={{
@@ -1399,8 +1441,298 @@ export default function App() {
         </button>
       </div>
 
+      {/* Blur overlay — behind ck-drawer and action bar, grows as drawer opens */}
+      {(() => {
+        const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+        return (
+          <div style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 17,
+            backdropFilter: `blur(${interp * 2}px)`,
+            WebkitBackdropFilter: `blur(${interp * 2}px)`,
+            background: `rgba(0,0,0,${interp * 0.15})`,
+            opacity: interp,
+            pointerEvents: interp > 0.05 ? "auto" : "none",
+            transition: checkoutDrawerDragging ? "none" : "opacity 0.4s ease",
+          }} onClick={() => { setCheckoutDrawerExpanded(false); setCheckoutDrawerHeight(DRAWER_MIN); }} />
+        );
+      })()}
+
+      {/* Checkout drawer — overlays editor, sits below action bar */}
+      <div
+        ref={checkoutDrawerRef}
+        style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: checkoutDrawerHeight,
+          background: "#F4F4F4",
+          borderTopLeftRadius: 28,
+          borderTopRightRadius: 28,
+          boxShadow: checkoutDrawerShadow,
+          display: "flex",
+          flexDirection: "column",
+          transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "height 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.5s ease, transform 0.6s cubic-bezier(0.16,1,0.3,1)",
+          overscrollBehavior: "none",
+          touchAction: "manipulation",
+          zIndex: 18,
+          opacity: selectedDesignId || (showPopup && !hasAnyItems) ? 0 : 1,
+          transform: (showPopup && !hasAnyItems) ? "translateY(24px)" : "translateY(0)",
+          pointerEvents: selectedDesignId || (showPopup && !hasAnyItems) ? "none" : "auto",
+        }}
+      >
+        {/* Drag handle */}
+        <div
+          onMouseDown={onCheckoutDrawerHandleMouseDown}
+          onTouchStart={e => { checkoutDrawerStart(e.touches[0].clientY); }}
+          onTouchMove={e => { e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
+          onTouchEnd={e => { checkoutDrawerEnd(e.changedTouches[0].clientY); }}
+          style={{ height: 20, touchAction: "none", display: "flex", justifyContent: "center", alignItems: "center", cursor: "grab", flexShrink: 0 }}
+        >
+          <svg ref={checkoutDrawerHandleSvgRef} width="36" height="8" viewBox="0 0 36 4" style={{ overflow: "visible" }}>
+            <path ref={checkoutDrawerHandlePathRef} d="M0,2 Q18,2 36,2" stroke="rgb(204,204,204)" strokeWidth="4" strokeLinecap="round" fill="none" />
+          </svg>
+        </div>
+
+        {/* Scrollable content */}
+        <div
+          ref={checkoutDrawerScrollRef}
+          onTouchStart={onCheckoutDrawerScrollTouchStart}
+          onTouchMove={onCheckoutDrawerScrollTouchMove}
+          onTouchEnd={onCheckoutDrawerScrollTouchEnd}
+          style={{
+            flex: 1,
+            overflowY: checkoutDrawerExpanded ? "auto" : "hidden",
+            overscrollBehavior: "none",
+            overscrollBehaviorY: "contain" as any,
+            WebkitOverflowScrolling: "touch" as any,
+            touchAction: "pan-y",
+            paddingBottom: checkoutDrawerExpanded ? 36 : 0,
+          }}
+        >
+          {/* Header row with toggle button (ck-drawer = checkout-drawer) */}
+          <div style={{ display: "flex", alignItems: "center", padding: "0 20px", gap: 0 }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8, overflow: "hidden", flexShrink: 0,
+              maxWidth: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 200}px`,
+              marginRight: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 8}px`,
+              opacity: 1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))),
+              transition: "max-width 0.3s ease, margin-right 0.3s ease, opacity 0.3s ease",
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: "#000", flexShrink: 0, opacity: 0.7 }}>{currentPrice.toFixed(2).replace(".", ",") + " €"}</span>
+              <span style={{ fontSize: 20, color: "#000", flexShrink: 0, opacity: 0.4, lineHeight: 1 }}>·</span>
+            </div>
+            <h2 style={{
+              margin: 0,
+              fontFamily: "MADEOuterSans, sans-serif",
+              fontSize: 14, lineHeight: 1.4, fontWeight: 500, letterSpacing: "-0.02em", color: "#000",
+              opacity: 0.4 + Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))) * 0.4,
+              flex: 1, overflow: "hidden",
+              whiteSpace: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "nowrap" : "normal",
+              textOverflow: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "ellipsis" : "clip",
+              maxHeight: `${19.6 + Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))) * 19.6}px`,
+            }}>
+              {selectedProduct.name}
+            </h2>
+            <button
+              type="button"
+              onClick={() => {
+                const next = !checkoutDrawerExpanded;
+                setCheckoutDrawerExpanded(next);
+                setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
+              }}
+              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#E9E9E9", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer" }}
+            >
+              <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ position: "absolute", display: "flex", alignItems: "center", justifyContent: "center", transition: "opacity 0.2s, transform 0.2s", opacity: checkoutDrawerExpanded ? 0 : 1, transform: checkoutDrawerExpanded ? "scale(0.6)" : "scale(1)" }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15" /></svg>
+                </span>
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "center", transition: "opacity 0.2s, transform 0.2s", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "scale(1)" : "scale(0.6)" }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </span>
+              </span>
+            </button>
+          </div>
+
+          {/* Color selection */}
+          {(() => {
+            const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+            return (
+              <div style={{
+                fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#111", textTransform: "uppercase", paddingLeft: 20,
+                opacity: interp,
+                maxHeight: `${interp * 32}px`,
+                marginTop: `${interp * 12}px`,
+                marginBottom: `${interp * 12}px`,
+                overflow: "hidden",
+                transition: "opacity 0.3s ease, max-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease",
+              }}>
+                COLOR: {selectedProduct.colors.find(c => c.key === selectedColor)?.label.toUpperCase()}
+              </div>
+            );
+          })()}
+          <div style={{ position: "relative", marginBottom: 14 }}>
+            <div
+              onTouchStart={onHorizontalTouchStart}
+              onTouchMove={onHorizontalTouchMove}
+              onTouchEnd={onHorizontalTouchEnd}
+              style={{ display: "flex", gap: 0, overflowX: "auto", paddingBottom: 4, paddingLeft: 20, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" as any }}
+            >
+              {selectedProduct.colors.map(({ key, label }, i) => {
+                const borderInterp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+                return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={label}
+                  onClick={() => setSelectedColor(key)}
+                  style={{
+                    width: 58, height: 58,
+                    borderTopLeftRadius: i === 0 ? 8 : 0,
+                    borderBottomLeftRadius: i === 0 ? 8 : 0,
+                    borderTopRightRadius: i === selectedProduct.colors.length - 1 ? 8 : 0,
+                    borderBottomRightRadius: i === selectedProduct.colors.length - 1 ? 8 : 0,
+                    border: key === selectedColor ? `2px solid rgba(17,17,17,${borderInterp})` : `1px solid rgba(190,190,190,${borderInterp})`,
+                    background: key === selectedColor ? "#F4F4F4" : "none",
+                    padding: 8, flexShrink: 0, boxSizing: "border-box", overflow: "hidden",
+                    cursor: "pointer", marginRight: -1, position: "relative",
+                    zIndex: key === selectedColor ? 1 : 0,
+                    transition: "border-color 0.3s ease",
+                  }}
+                >
+                  <img src={selectedProduct.thumbnail(key)} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6, display: "block" }} />
+                </button>
+              );})}
+              <div style={{ width: 12, flexShrink: 0 }} />
+            </div>
+            <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 48, background: "linear-gradient(to right, transparent, #F4F4F4)", pointerEvents: "none" }} />
+          </div>
+
+          {/* Available sizes + CTA buttons — fade in as ck-drawer expands */}
+          {(() => {
+            const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+            const oos = selectedProduct.outOfStock[selectedColor] ?? [];
+            return (
+              <div style={{ opacity: interp, transition: "opacity 0.3s ease" }}>
+                {/* Available sizes */}
+                <div style={{ margin: "0 20px 16px", overflow: "hidden" }}>
+                  <div style={{ fontSize: 14, lineHeight: 1.8 }}>
+                    {selectedProduct.sizes.map((size, i) => {
+                      const isOos = oos.indexOf(size) !== -1;
+                      return (
+                        <span key={size}>
+                          {i > 0 && <span style={{ color: "#bbb", margin: "0 4px" }}> · </span>}
+                          <span style={{ color: isOos ? "#bbb" : "#111", textDecoration: isOos ? "line-through" : "none" }}>{size}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Buttons */}
+                <div style={{ padding: "0 20px" }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginBottom: 10 }}>
+                    {currentPrice.toFixed(2).replace(".", ",") + " €"}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSizeDrawerOpen(true)}
+                    style={{ width: "100%", height: 54, borderRadius: 12, border: "none", background: "#000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                  >
+                    <img src="/icons/icon-cart.svg" alt="" style={{ width: 20, height: 20, filter: "invert(1)" }} />
+                    <span>Select size</span>
+                  </button>
+                </div>
+
+                {/* Shipping info */}
+                <div style={{ border: `1px solid rgba(190,190,190,${interp})`, borderRadius: 12, overflow: "hidden", margin: "16px 20px 0", transition: "border-color 0.3s ease" }}>
+                  <div style={{ padding: "16px", display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <img src="/icons/icon-truck.svg" alt="" style={{ width: 24, height: 24, flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", gap: 12, marginBottom: 6 }}>
+                        <span style={{ fontSize: 14, color: "#3a8a3a", fontWeight: 500 }}>Express</span>
+                        <span style={{ fontSize: 14, fontWeight: 700 }}>Apr 16 – Apr 18</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
+                        <span style={{ fontSize: 14, color: "#111" }}>Standard</span>
+                        <span style={{ fontSize: 14, fontWeight: 700 }}>Apr 20 – Apr 22</span>
+                      </div>
+                      <span style={{ fontSize: 14, color: "#111", textDecoration: "underline", cursor: "pointer" }}>See options</span>
+                    </div>
+                  </div>
+                  <div style={{ height: 1, background: `rgba(190,190,190,${interp})`, margin: "0 16px", transition: "background 0.3s ease" }} />
+                  <div style={{ padding: "16px", display: "flex", alignItems: "center", gap: 12 }}>
+                    <img src="/icons/icon-refresh.svg" alt="" style={{ width: 24, height: 24, flexShrink: 0 }} />
+                    <span style={{ fontSize: 14, color: "#111", textDecoration: "underline", cursor: "pointer" }}>30-day return guarantee</span>
+                  </div>
+                </div>
+
+                {/* Accordion — product details, size & fit, reviews */}
+                <div style={{ border: `1px solid rgba(190,190,190,${interp})`, borderRadius: 12, overflow: "hidden", margin: "16px 20px 8px" }}>
+                  {[
+                    { key: "product-details", label: "Product details", content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua." },
+                    { key: "size-fit", label: "Size & fit", content: "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat." },
+                    { key: "product-views", label: "Product views", extra: (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                        {[1,2,3,4].map(i => <svg key={i} width="18" height="18" viewBox="0 0 24 24" fill="#EA580C"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>)}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EA580C" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                        <span style={{ fontSize: 14, color: "#111" }}>4.5 (128 reviews)</span>
+                      </div>
+                    ), content: "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur." },
+                  ].map(({ key, label, content, extra }: { key: string; label: string; content: string; extra?: React.ReactNode }, i) => (
+                    <div key={key} style={{ borderTop: i === 0 ? "none" : `1px solid rgba(190,190,190,${interp})` }}>
+                      <button
+                        type="button"
+                        onClick={() => setOpenAccordions(prev => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; })}
+                        style={{ width: "100%", background: "none", border: "none", padding: "16px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+                      >
+                        <div style={{ textAlign: "left" }}>
+                          <div style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>{label}</div>
+                          {!openAccordions.has(key) && extra}
+                        </div>
+                        <img src="/icons/icon-chevron-down.svg" alt="" style={{ width: 20, height: 20, filter: "invert(20%)", flexShrink: 0, transition: "transform 0.2s", transform: openAccordions.has(key) ? "rotate(180deg)" : "none" }} />
+                      </button>
+                      <div style={{ overflow: "hidden", maxHeight: openAccordions.has(key) ? 200 : 0, transition: "max-height 0.3s cubic-bezier(0.16,1,0.3,1)" }}>
+                        <p style={{ margin: "0 16px 16px", fontSize: 14, color: "#555", lineHeight: 1.6 }}>{content}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+        {/* Bottom fade — visible only when collapsed */}
+        <div style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 10,
+          background: "linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,0.1))",
+          pointerEvents: "none",
+          opacity: checkoutDrawerExpanded ? 0 : 1,
+          transition: "opacity 0.4s ease",
+          zIndex: 1,
+        }} />
+      </div>
+
       {/* Bottom action bar */}
-      <div id="action-bar" style={{ position: "absolute", bottom: 0, left: 0, right: 0, paddingTop: 12, paddingBottom: 20, overflow: "visible", zIndex: 2, opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
+      <div id="action-bar" style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
+
+        {/* Customize button — shown only when ck-drawer is at MAX */}
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(10px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: "opacity 0.35s ease, transform 0.45s cubic-bezier(0.16,1,0.3,1)" }}>
+          <button
+            type="button"
+            onClick={() => { setCheckoutDrawerExpanded(false); setCheckoutDrawerHeight(DRAWER_MIN); }}
+            style={{ height: 46, padding: "0 24px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", fontSize: 14, fontWeight: 600, cursor: "pointer", boxShadow: "0 1px 5px rgba(0,0,0,0.06)" }}
+          >
+            Continue customizing
+          </button>
+        </div>
+
         {/* Scrollable gray buttons — offset by black button width */}
         <div
           id="action-bar-scroll"
@@ -1414,7 +1746,7 @@ export default function App() {
             gap: 8,
             overflowX: animating ? "visible" : "auto",
             overflowY: "visible",
-            paddingLeft: 16 + BAR_BTN_INITIAL + 8, /* kept as initial value; updated dynamically via animateBtnWidth */
+            paddingLeft: 16,
             paddingTop: 8,
             paddingBottom: 8,
             marginTop: -8,
@@ -1423,82 +1755,67 @@ export default function App() {
             scrollbarWidth: "none",
             WebkitOverflowScrolling: "touch",
             touchAction: "pan-x",
+            maskImage: scrollAtEnd ? "none" : "linear-gradient(to right, black calc(100% - 76px), transparent 100%)",
+            WebkitMaskImage: scrollAtEnd ? "none" : "linear-gradient(to right, black calc(100% - 76px), transparent 100%)",
+            opacity: checkoutDrawerExpanded ? 0 : 1,
+            pointerEvents: checkoutDrawerExpanded ? "none" : "auto",
+            transition: "opacity 0.25s ease",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", height: 46, borderRadius: 999, background: "#F4F4F4", flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", overflow: "hidden", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
-            <button type="button" className="action-bar-btn" onClick={() => setColorDrawerOpen(true)} style={{ height: "100%", padding: "2px 12px 2px 8px", border: "none", background: "transparent", color: "#000", display: "flex", alignItems: "center", gap: 4, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
-              <img src={selectedProduct.thumbnail(selectedColor)} width={28} height={28} alt="" style={{ borderRadius: 999, display: "block", objectFit: "cover" }} />
-
-              <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
-            </button>
-            <div style={{ width: 1, alignSelf: "stretch", background: "#e1e1e1", flexShrink: 0 }} />
-            <button type="button" className="action-bar-btn" onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: "100%", padding: "2px 12px 2px 12px", border: "none", background: "transparent", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
-              <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
-              <span>Print</span>
-              <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
-            </button>
-          </div>
+          <button type="button" className="action-bar-btn" onClick={() => setSlidePopoverOpen(v => !v)} style={{ height: 46, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
+            <span>{slides[activeIndex]?.label ?? "Front"}</span>
+            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+          </button>
+          <button type="button" className="action-bar-btn" onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: 46, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
+            <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
+            <span>Print</span>
+            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+          </button>
           <button type="button" onClick={() => setAllProductsDrawerOpen(true)} className="action-bar-btn" style={{ height: 46, padding: "0 16px 0px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
             <img src="/icons/products.png" width={"auto"} height={40} style={{ marginTop: -2 }} alt="" />
-            <span>All products</span>
+            <span>Change product</span>
           </button>
           <div style={{ width: 16, flexShrink: 0 }} />
         </div>
 
-        {/* Right-edge fade hint */}
-        <div style={{
-          position: "absolute",
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: 64,
-          background: "linear-gradient(to right, transparent, #e8e8e8)",
-          pointerEvents: "none",
-          opacity: scrollAtEnd ? 0 : 1,
-          transition: "opacity 0.35s ease",
-          zIndex: 1,
-        }} />
-
-        {/* Fixed black button */}
+        {/* Add design button — absolutely positioned, floats above bar when scrolled */}
         <button
-          id="action-bar-black-btn"
-          ref={blackBtnRef}
+          ref={addDesignBtnRef}
           type="button"
-          onClick={() => setSizeDrawerOpen(true)}
+          className="action-bar-btn"
+          onClick={() => setDesignDrawerOpen(true)}
           style={{
             position: "absolute",
             left: 16,
-            height: 46,
-            padding: barScrollProgress > 0 ? "26px" : "0 16px",
+            top: barScrollProgress > 0 ? -62 : 12,
+            height: barScrollProgress > 0 ? 54 : 46,
+            padding: barScrollProgress > 0 ? "0" : "0 18px",
             borderRadius: 999,
             border: "none",
-            background: "#000",
+            background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
             color: "#fff",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            display: "flex", alignItems: "center", justifyContent: "center",
             gap: 8,
-            fontSize: 14,
-            fontWeight: 600,
+            fontSize: 14, fontWeight: 600, flexShrink: 0,
+            boxShadow: barScrollProgress > 0 ? "0 4px 16px rgba(0,0,0,0.35)" : "0 4px 14px rgba(0,0,0,0.2)",
             overflow: "hidden",
-            flexShrink: 0,
-            zIndex: 2,
             boxSizing: "border-box",
             whiteSpace: "nowrap",
-            boxShadow: barScrollProgress > 0 ? "0 4px 16px rgba(0,0,0,0.35)" : "none",
-            top: revealed ? (barScrollProgress > 0 ? -56 : 12) : 80,
-            transition: revealed ? "box-shadow 0.4s ease, top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)" : "none",
+            zIndex: 2,
+            opacity: checkoutDrawerExpanded ? 0 : 1,
+            pointerEvents: checkoutDrawerExpanded ? "none" : "auto",
+            transition: "top 0.5s cubic-bezier(0.34,1.56,0.64,1), height 0.4s ease, box-shadow 0.4s ease, opacity 0.25s ease",
           }}
         >
-          <img src="/icons/icon-cart-plus.svg" alt="Cart" style={{ width: 20, height: 20, filter: "invert(1)", flexShrink: 0 }} />
-          <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute", left: 38 } : {}) }}>{currentPrice.toFixed(2).replace(".", ",") + " €"}</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}><path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/></svg>
+          <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute" as const, left: 38 } : {}) }}>Add design</span>
         </button>
 
       </div>
 
       {showPopup && !hasAnyItems && (
         <>
-          <div onTouchStart={(e) => { e.preventDefault(); dismissPopup(); }} onClick={dismissPopup} style={{ position: "fixed", inset: 0, zIndex: 50, backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)", touchAction: "none", cursor: "pointer" }} />
+          <div onTouchStart={(e) => { e.preventDefault(); dismissPopup(); }} onClick={dismissPopup} style={{ position: "fixed", inset: 0, zIndex: 50, touchAction: "none", cursor: "pointer" }} />
           <div id="onboarding-popup" style={{
             position: "absolute",
             bottom: 16,
@@ -1577,6 +1894,7 @@ export default function App() {
               <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#111", textTransform: "uppercase", paddingLeft: 16, marginBottom: 12 }}>
                 COLOR: {selectedProduct.colors.find(c => c.key === selectedColor)?.label.toUpperCase()}
               </div>
+              <div style={{ position: "relative", marginBottom: 14 }}>
               <div style={{
                 display: "flex",
                 gap: 0,
@@ -1585,7 +1903,6 @@ export default function App() {
                 paddingLeft: 16,
                 scrollbarWidth: "none",
                 WebkitOverflowScrolling: "touch" as any,
-                marginBottom: 14,
               }}>
                 {selectedProduct.colors.map(({ key, label }, i) => (
                   <button
@@ -1621,6 +1938,8 @@ export default function App() {
                 ))}
                 <div style={{ width: 12, flexShrink: 0 }} />
               </div>
+              <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 48, background: "linear-gradient(to right, transparent, #fff)", pointerEvents: "none" }} />
+              </div>{/* end color scroll wrapper */}
               <div style={{ border: "1px solid #dedede", borderRadius: 12, overflow: "hidden", marginLeft: 16, marginRight: 16, marginBottom: 14, padding: 16 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#111", textTransform: "uppercase", marginBottom: 8 }}>
                   Available Sizes:
@@ -1775,31 +2094,6 @@ export default function App() {
 
       </div>{/* end blur wrapper */}
 
-      {/* Plus button — Scenario A: bottom-right when active side has items */}
-      <div style={{
-        position: "absolute",
-        right: 16,
-        bottom: 84,
-        transform: !revealed ? "translateX(20px)" : (activeIsEmpty || selectedDesignId) ? "translateX(120px)" : "translateX(0)",
-        opacity: revealed && !selectedDesignId ? 1 : 0,
-        pointerEvents: revealed && !activeIsEmpty && !selectedDesignId ? "all" : "none",
-        transition: !revealed ? "none" : activeIsEmpty
-          ? "transform 0.4s cubic-bezier(0.4,0,0.6,1), opacity 0.3s ease"
-          : "transform 0.4s cubic-bezier(0.34,1.56,0.64,1), opacity 0.3s ease",
-        zIndex: 31,
-      }}>
-        <button type="button" onClick={() => setDesignDrawerOpen(true)} style={{
-          width: 56, height: 56, borderRadius: 999, border: "none",
-          background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
-          boxShadow: "0 4px 14px 0 rgba(0,0,0,0.25)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          cursor: "pointer",
-        }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-          </svg>
-        </button>
-      </div>
 
       {/* Text options drawer */}
       <Drawer.Root open={textOptionsDrawerOpen} onOpenChange={setTextOptionsDrawerOpen}>
@@ -1929,10 +2223,47 @@ export default function App() {
         sizes={selectedProduct.sizes}
         onAddToCart={() => {
           setCartCount(c => c + 1);
-          setToastVisible(true);
-          setTimeout(() => setToastVisible(false), 2500);
+          setCheckoutDrawerExpanded(false);
+          setCheckoutDrawerHeight(DRAWER_MIN);
+          setTimeout(() => {
+            setToastVisible(true);
+            setTimeout(() => setToastVisible(false), 2500);
+          }, 400);
         }}
       />
+
+      {/* Slide selection drawer */}
+      <Drawer.Root open={slidePopoverOpen} onOpenChange={setSlidePopoverOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content style={{
+            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999,
+            background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16,
+            outline: "none", fontFamily: '"Inter Variable", sans-serif',
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 12px" }}>
+              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Select view</span>
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setSlidePopoverOpen(false)} />
+            </div>
+            <div style={{ width: "100%", height: 1, background: "#e8e8e8" }} />
+            <div style={{ paddingBottom: 32 }}>
+              {slides.map((slide: { label: string; src: string }, i: number) => (
+                <div key={slide.label}>
+                  <button
+                    type="button"
+                    onClick={() => { goToSlide(i); setSlidePopoverOpen(false); }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "0 20px", height: 52, border: "none", background: "none", fontSize: 15, fontWeight: i === index ? 600 : 400, color: "#111", cursor: "pointer" }}
+                  >
+                    <span>{slide.label}</span>
+                    {i === index && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#111", flexShrink: 0 }} />}
+                  </button>
+                  {i < slides.length - 1 && <div style={{ height: 1, background: "#f0f0f0", margin: "0 20px" }} />}
+                </div>
+              ))}
+            </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
 
       <Drawer.Root open={allProductsDrawerOpen} onOpenChange={setAllProductsDrawerOpen}>
         <Drawer.Portal>
