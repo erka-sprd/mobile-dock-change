@@ -1769,14 +1769,14 @@ export default function App() {
       {/* Bottom action bar */}
       <div id="action-bar" style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
 
-        {/* Customize button — shown only when ck-drawer is at MAX */}
+        {/* Change product button — shown only when ck-drawer is at MAX */}
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(10px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: "opacity 0.35s ease, transform 0.45s cubic-bezier(0.16,1,0.3,1)" }}>
           <button
             type="button"
-            onClick={() => { setCheckoutDrawerExpanded(false); setCheckoutDrawerHeight(DRAWER_MIN); }}
+            onClick={() => setAllProductsDrawerOpen(true)}
             style={{ height: 46, padding: "0 24px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", fontSize: 14, fontWeight: 600, cursor: "pointer", boxShadow: "0 1px 5px rgba(0,0,0,0.06)" }}
           >
-            Continue customizing
+            Change product
           </button>
         </div>
 
