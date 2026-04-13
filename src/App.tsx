@@ -145,23 +145,16 @@ export default function App() {
   const slides = getSlidesForProduct(selectedProductId, selectedColor);
   const savedSlideIndex = parseInt(localStorage.getItem("activeSlideIndex") ?? "0", 10) || 0;
   const [index, setIndex] = useState(savedSlideIndex);
-  const [showSlideLabel, setShowSlideLabel] = useState(false);
+
   const [activeIndex, setActiveIndex] = useState(savedSlideIndex);
   const [targetIndex, setTargetIndex] = useState<number | null>(null);
   const [phase, setPhase] = useState<"idle" | "out" | "in">("idle");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
-  const horizontalGesture = useRef({ startX: 0, startY: 0, locked: false });
-  const barScrollRef = useRef<HTMLDivElement>(null);
+
+
   const addDesignBtnRef = useRef<HTMLButtonElement>(null);
-  const addDesignExpandedWidth = useRef<number | null>(null);
-  const addDesignCurrentWidth = useRef<number | null>(null);
-  const addDesignAnimRef = useRef<number | null>(null);
-  const isBarCompactRef = useRef(false);
-  const isBarAnimatingRef = useRef(false);
-  const COMPACT_WIDTH = 54;
-  const ANIM_DURATION = 500;
 
   // Checkout drawer state
   const DRAWER_MIN = 70;
@@ -169,6 +162,8 @@ export default function App() {
   const [checkoutDrawerMaxH, setCheckoutDrawerMaxH] = useState(DRAWER_MIN);
   const [checkoutDrawerExpanded, setCheckoutDrawerExpanded] = useState(false);
   const [checkoutDrawerDragging, setCheckoutDrawerDragging] = useState(false);
+  const [checkoutDrawerContentScrolled, setCheckoutDrawerContentScrolled] = useState(false);
+  const [checkoutDrawerScrolledToBottom, setCheckoutDrawerScrolledToBottom] = useState(false);
   const checkoutDrawerRef = useRef<HTMLDivElement>(null);
   const checkoutDrawerScrollRef = useRef<HTMLDivElement>(null);
   const checkoutDrawerHandlePathRef = useRef<SVGPathElement>(null);
@@ -178,10 +173,9 @@ export default function App() {
   const checkoutDrawerChevronState = useRef({ bend: 0, gray: 0.8, scale: 1, rafId: 0 });
   const checkoutDrawerScrollGesture = useRef({ startY: 0, startScrollTop: 0, draggingSheet: false, lockedAtTop: false });
 
-  const [scrollAtEnd, setScrollAtEnd] = useState(false);
-  const [barScrollProgress, setBarScrollProgress] = useState(0);
   const [colorDrawerOpen, setColorDrawerOpen] = useState(false);
   const [allProductsDrawerOpen, setAllProductsDrawerOpen] = useState(false);
+  const [moreMenuDrawerOpen, setMoreMenuDrawerOpen] = useState(false);
   const [colorDrawerScrolled, setColorDrawerScrolled] = useState(false);
   const [openAccordions, setOpenAccordions] = useState<Set<string>>(new Set());
   const [designDrawerOpen, setDesignDrawerOpen] = useState(false);
@@ -193,7 +187,15 @@ export default function App() {
   const textScrollPos = useRef(0);
   const [sizeDrawerOpen, setSizeDrawerOpen] = useState(false);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [cartCount, setCartCount] = useState(0);
+  const [cartItems, setCartItems] = useState<Array<{ product: string; color: string; colorLabel: string; thumbnail: string; quantities: Record<string, number>; unitPrice: number }>>(() => {
+    try { return JSON.parse(localStorage.getItem("cartItems") || "[]"); } catch { return []; }
+  });
+  const [cartCount, setCartCount] = useState<number>(() => {
+    try { return JSON.parse(localStorage.getItem("cartCount") || "0"); } catch { return 0; }
+  });
+  const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
+  useEffect(() => { localStorage.setItem("cartItems", JSON.stringify(cartItems)); }, [cartItems]);
+  useEffect(() => { localStorage.setItem("cartCount", JSON.stringify(cartCount)); }, [cartCount]);
   const [toastVisible, setToastVisible] = useState(false);
   const [, setHandleTick] = useState(0);
   const [previewDrawerOpen, setPreviewDrawerOpen] = useState(false);
@@ -260,63 +262,8 @@ export default function App() {
     | { type: "resize-tl" | "resize-tr" | "resize-bl" | "resize-br"; itemId: string; startTx: number; startTy: number; startX: number; startY: number; startW: number; startH: number; startFontSize: number; anchorX: number; anchorY: number; startDist: number; anchorLocalX: number; anchorLocalY: number; }
   >({ type: "idle" });
 
-  const handleBarScroll = () => {
-    const el = barScrollRef.current;
-    if (!el) return;
-    const max = el.scrollWidth - el.clientWidth;
-    const progress = max > 0 ? el.scrollLeft / max : 0;
-    setScrollAtEnd(max <= 0 || el.scrollLeft >= max - 4);
-    setBarScrollProgress(progress);
-    if (isBarAnimatingRef.current) return;
-    const btn = addDesignBtnRef.current;
-    if (!btn) return;
-    const shouldBeCompact = progress > 0;
-    if (shouldBeCompact === isBarCompactRef.current) return;
-    isBarCompactRef.current = shouldBeCompact;
-    if (shouldBeCompact) {
-      addDesignExpandedWidth.current = btn.offsetWidth;
-      animateAddDesignWidth(btn.offsetWidth, COMPACT_WIDTH);
-    } else {
-      const expandedWidth = addDesignExpandedWidth.current ?? btn.offsetWidth;
-      animateAddDesignWidth(addDesignCurrentWidth.current ?? COMPACT_WIDTH, expandedWidth);
-    }
-  };
 
-  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 
-  const animateAddDesignWidth = (fromWidth: number, toWidth: number) => {
-    const btn = addDesignBtnRef.current;
-    const scroll = barScrollRef.current;
-    if (!btn || !scroll) return;
-    if (addDesignAnimRef.current !== null) cancelAnimationFrame(addDesignAnimRef.current);
-    isBarAnimatingRef.current = true;
-    const start = performance.now();
-    const tick = (now: number) => {
-      const t = Math.min((now - start) / ANIM_DURATION, 1);
-      const w = fromWidth + (toWidth - fromWidth) * easeOut(t);
-      btn.style.width = `${w}px`;
-      addDesignCurrentWidth.current = w;
-      scroll.style.paddingLeft = `${16 + w + 8}px`;
-      if (t < 1) {
-        addDesignAnimRef.current = requestAnimationFrame(tick);
-      } else {
-        addDesignAnimRef.current = null;
-        isBarAnimatingRef.current = false;
-      }
-    };
-    addDesignAnimRef.current = requestAnimationFrame(tick);
-  };
-
-  // Set initial paddingLeft of scroll bar based on Add design button width
-  useEffect(() => {
-    const btn = addDesignBtnRef.current;
-    const scroll = barScrollRef.current;
-    if (!btn || !scroll) return;
-    const w = btn.offsetWidth;
-    addDesignCurrentWidth.current = w;
-    addDesignExpandedWidth.current = w;
-    scroll.style.paddingLeft = `${16 + w + 8}px`;
-  }, []);
 
   // Checkout drawer max height
   useEffect(() => {
@@ -423,7 +370,7 @@ export default function App() {
   };
 
   const checkoutDrawerShadow = checkoutDrawerExpanded
-    ? "0 -20px 80px rgba(0,0,0,0.32), 0 -4px 24px rgba(0,0,0,0.10)"
+    ? (checkoutDrawerContentScrolled ? "0 -50px 60px rgba(0,0,0,0.12), 0 -4px 20px rgba(0,0,0,0.09)" : "0 -20px 80px rgba(0,0,0,0.32), 0 -4px 24px rgba(0,0,0,0.10)")
     : "0 -50px 60px rgba(0,0,0,0.12), 0 -4px 20px rgba(0,0,0,0.09)";
 
   const imageGesture = useRef({
@@ -523,26 +470,6 @@ export default function App() {
     return () => window.cancelAnimationFrame(raf1);
   }, [phase]);
 
-  const onHorizontalTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    horizontalGesture.current = {
-      startX: e.touches[0].clientX,
-      startY: e.touches[0].clientY,
-      locked: false,
-    };
-  };
-
-  const onHorizontalTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    const dx = e.touches[0].clientX - horizontalGesture.current.startX;
-    const dy = e.touches[0].clientY - horizontalGesture.current.startY;
-    if (!horizontalGesture.current.locked && Math.abs(dx) > THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
-      horizontalGesture.current.locked = true;
-    }
-    if (horizontalGesture.current.locked) e.stopPropagation();
-  };
-
-  const onHorizontalTouchEnd = () => {
-    horizontalGesture.current.locked = false;
-  };
 
   const getTouchDistance = (touches: React.TouchList) => {
     if (touches.length < 2) return 0;
@@ -661,8 +588,6 @@ export default function App() {
 
     setTargetIndex(clampedIndex);
     setIndex(clampedIndex);
-    setShowSlideLabel(true);
-    window.setTimeout(() => setShowSlideLabel(false), 900);
     setPhase("out");
   };
 
@@ -1114,7 +1039,7 @@ export default function App() {
       <div style={{ background: "#fff", height: HEADER, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", flexShrink: 0, zIndex: 10 }}>
         <img src="/icons/Logo.svg" alt="Spreadshirt" style={{ height: 22, objectFit: "contain" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button type="button" style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex", position: "relative" }}>
+          <button type="button" onClick={() => setCartDrawerOpen(true)} style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex", position: "relative" }}>
             <img src="/icons/icon-cart.svg" alt="Cart" style={{ width: 24, height: 24 }} />
             {cartCount > 0 && (
               <span style={{ position: "absolute", top: 2, right: 2, width: 16, height: 16, borderRadius: "50%", background: "#16A34A", color: "#fff", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: '"Inter Variable", sans-serif' }}>
@@ -1390,21 +1315,16 @@ export default function App() {
             <button type="button" style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
               <img src="/icons/icon-arrow-return-back.svg" alt="Undo" style={{ width: 20, height: 20 }} />
             </button>
-            <button type="button" style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-              <img src="/icons/icon-arrow-forward.svg" alt="Redo" style={{ width: 20, height: 20 }} />
-            </button>
           </div>
-          <button type="button" style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+          <button type="button" onClick={() => setSlidePopoverOpen(v => !v)} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+            <span>{slides[activeIndex]?.label ?? "Front"}</span>
+            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+          </button>
+          <button type="button" onClick={() => setMoreMenuDrawerOpen(true)} style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
             <img src="/icons/icon-dots-horizontal.svg" width={20} height={20} alt="More" />
           </button>
         </div>
 
-        {/* Slide label */}
-        <div style={{ position: "absolute", bottom: 112, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#000", letterSpacing: 0.6, textTransform: "uppercase", opacity: showSlideLabel ? 1 : 0, transform: `translateY(${showSlideLabel ? 0 : -4}px)`, transition: "opacity 220ms ease-out, transform 220ms ease-out" }}>
-            {slides[index].label.replace(/\s+/g, "").toUpperCase()}
-          </div>
-        </div>
       </div>
 
 
@@ -1499,6 +1419,11 @@ export default function App() {
         {/* Scrollable content */}
         <div
           ref={checkoutDrawerScrollRef}
+          onScroll={e => {
+            const el = e.currentTarget as HTMLDivElement;
+            setCheckoutDrawerContentScrolled(el.scrollTop > 0);
+            setCheckoutDrawerScrolledToBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - 4);
+          }}
           onTouchStart={onCheckoutDrawerScrollTouchStart}
           onTouchMove={onCheckoutDrawerScrollTouchMove}
           onTouchEnd={onCheckoutDrawerScrollTouchEnd}
@@ -1543,7 +1468,7 @@ export default function App() {
                 setCheckoutDrawerExpanded(next);
                 setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
               }}
-              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#E9E9E9", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer" }}
+              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#fff", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 12 }}
             >
               <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <span style={{ position: "absolute", display: "flex", alignItems: "center", justifyContent: "center", transition: "opacity 0.2s, transform 0.2s", opacity: checkoutDrawerExpanded ? 0 : 1, transform: checkoutDrawerExpanded ? "scale(0.6)" : "scale(1)" }}>
@@ -1564,7 +1489,7 @@ export default function App() {
                 fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#111", textTransform: "uppercase", paddingLeft: 20,
                 opacity: interp,
                 maxHeight: `${interp * 32}px`,
-                marginTop: `${interp * 12}px`,
+                marginTop: `${interp * 22}px`,
                 marginBottom: `${interp * 12}px`,
                 overflow: "hidden",
                 transition: "opacity 0.3s ease, max-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease",
@@ -1573,41 +1498,42 @@ export default function App() {
               </div>
             );
           })()}
-          <div style={{ position: "relative", marginBottom: 14 }}>
-            <div
-              onTouchStart={onHorizontalTouchStart}
-              onTouchMove={onHorizontalTouchMove}
-              onTouchEnd={onHorizontalTouchEnd}
-              style={{ display: "flex", gap: 0, overflowX: "auto", paddingBottom: 4, paddingLeft: 20, scrollbarWidth: "none", WebkitOverflowScrolling: "touch" as any }}
-            >
-              {selectedProduct.colors.map(({ key, label }, i) => {
-                const borderInterp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
-                return (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 0, padding: "0 20px", marginBottom: 14 }}>
+            {selectedProduct.colors.map(({ key, label }, i) => {
+              const borderInterp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+              const COLS = 6;
+              const total = selectedProduct.colors.length;
+              const col = i % COLS;
+              const hasRight = (i + 1 < total) && ((i + 1) % COLS !== 0);
+              const hasLeft = col > 0;
+              const hasAbove = i >= COLS;
+              const hasBelow = i + COLS < total;
+              const R = 8;
+              return (
                 <button
                   key={key}
                   type="button"
                   aria-label={label}
                   onClick={() => setSelectedColor(key)}
                   style={{
-                    width: 58, height: 58,
-                    borderTopLeftRadius: i === 0 ? 8 : 0,
-                    borderBottomLeftRadius: i === 0 ? 8 : 0,
-                    borderTopRightRadius: i === selectedProduct.colors.length - 1 ? 8 : 0,
-                    borderBottomRightRadius: i === selectedProduct.colors.length - 1 ? 8 : 0,
-                    border: key === selectedColor ? `2px solid rgba(17,17,17,${borderInterp})` : `1px solid rgba(190,190,190,${borderInterp})`,
-                    background: key === selectedColor ? "#F4F4F4" : "none",
-                    padding: 8, flexShrink: 0, boxSizing: "border-box", overflow: "hidden",
-                    cursor: "pointer", marginRight: -1, position: "relative",
+                    flex: "0 0 calc(100% / 6)", aspectRatio: "1 / 1",
+                    borderTopLeftRadius: !hasAbove && !hasLeft ? R : 0,
+                    borderTopRightRadius: !hasAbove && !hasRight ? R : 0,
+                    borderBottomLeftRadius: !hasBelow && !hasLeft ? R : 0,
+                    borderBottomRightRadius: !hasBelow && !hasRight ? R : 0,
+                    border: key === selectedColor ? `1px solid rgba(17,17,17,${borderInterp})` : `1px solid rgba(208,208,208,${borderInterp})`,
+                    background: "none",
+                    padding: 8, boxSizing: "border-box", overflow: "hidden",
+                    cursor: "pointer", position: "relative",
                     zIndex: key === selectedColor ? 1 : 0,
-                    transition: "border-color 0.3s ease",
+                    marginRight: -1, marginBottom: -1,
+                    transition: "border-color 0.2s ease",
                   }}
                 >
-                  <img src={selectedProduct.thumbnail(key)} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6, display: "block" }} />
+                  <img src={selectedProduct.thumbnail(key)} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                 </button>
-              );})}
-              <div style={{ width: 12, flexShrink: 0 }} />
-            </div>
-            <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 48, background: "linear-gradient(to right, transparent, #F4F4F4)", pointerEvents: "none" }} />
+              );
+            })}
           </div>
 
           {/* Available sizes + CTA buttons — fade in as ck-drawer expands */}
@@ -1616,34 +1542,36 @@ export default function App() {
             const oos = selectedProduct.outOfStock[selectedColor] ?? [];
             return (
               <div style={{ opacity: interp, transition: "opacity 0.3s ease" }}>
-                {/* Available sizes */}
-                <div style={{ margin: "0 20px 16px", overflow: "hidden" }}>
-                  <div style={{ fontSize: 14, lineHeight: 1.8 }}>
-                    {selectedProduct.sizes.map((size, i) => {
-                      const isOos = oos.indexOf(size) !== -1;
-                      return (
-                        <span key={size}>
-                          {i > 0 && <span style={{ color: "#bbb", margin: "0 4px" }}> · </span>}
-                          <span style={{ color: isOos ? "#bbb" : "#111", textDecoration: isOos ? "line-through" : "none" }}>{size}</span>
-                        </span>
-                      );
-                    })}
+                {/* Out of stock sizes */}
+                {oos.length > 0 && (
+                  <div style={{ margin: "0 20px 16px", fontSize: 15, color: "#888" }}>
+                    {oos.slice(0, -1).join(", ")}
+                    {oos.length > 1 ? " and " : ""}
+                    {oos[oos.length - 1]} out of stock
                   </div>
-                </div>
+                )}
 
                 {/* Buttons */}
                 <div style={{ padding: "0 20px" }}>
                   <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginBottom: 10 }}>
                     {currentPrice.toFixed(2).replace(".", ",") + " €"}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setSizeDrawerOpen(true)}
-                    style={{ width: "100%", height: 54, borderRadius: 12, border: "none", background: "#000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
-                  >
-                    <img src="/icons/icon-cart.svg" alt="" style={{ width: 20, height: 20, filter: "invert(1)" }} />
-                    <span>Select size</span>
-                  </button>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSizeDrawerOpen(true)}
+                      style={{ flex: 1, height: 54, borderRadius: 12, border: "none", background: "#000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                    >
+                      <img src="/icons/icon-cart.svg" alt="" style={{ width: 20, height: 20, filter: "invert(1)" }} />
+                      <span>Select size</span>
+                    </button>
+                    <button
+                      type="button"
+                      style={{ width: 54, height: 54, borderRadius: 12, border: "1px solid #e0e0e0", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer" }}
+                    >
+                      <img src="/icons/icon-heart.svg" alt="Save" style={{ width: 22, height: 22 }} />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Shipping info */}
@@ -1760,7 +1688,7 @@ export default function App() {
           height: 10,
           background: "linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,0.1))",
           pointerEvents: "none",
-          opacity: checkoutDrawerExpanded ? 0 : 1,
+          opacity: checkoutDrawerExpanded ? (checkoutDrawerScrolledToBottom ? 0 : 1) : 1,
           transition: "opacity 0.4s ease",
           zIndex: 1,
         }} />
@@ -1770,93 +1698,41 @@ export default function App() {
       <div id="action-bar" style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
 
         {/* Change product button — shown only when ck-drawer is at MAX */}
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(10px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: "opacity 0.35s ease, transform 0.45s cubic-bezier(0.16,1,0.3,1)" }}>
+        <div style={{ position: "absolute", inset: 0, zIndex: 17, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(60px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: checkoutDrawerExpanded ? "opacity 0s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.25s" : "opacity 0.15s ease 0s, transform 0.15s ease 0s" }}>
           <button
             type="button"
             onClick={() => setAllProductsDrawerOpen(true)}
             style={{ height: 46, padding: "0 24px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", fontSize: 14, fontWeight: 600, cursor: "pointer", boxShadow: "0 1px 5px rgba(0,0,0,0.06)" }}
           >
-            Change product
+            Change this product
           </button>
         </div>
 
-        {/* Scrollable gray buttons — offset by black button width */}
-        <div
-          id="action-bar-scroll"
-          ref={barScrollRef}
-          onScroll={handleBarScroll}
-          onTouchStart={onHorizontalTouchStart}
-          onTouchMove={onHorizontalTouchMove}
-          onTouchEnd={onHorizontalTouchEnd}
-          style={{
-            display: "flex",
-            gap: 8,
-            overflowX: animating ? "visible" : "auto",
-            overflowY: "visible",
-            paddingLeft: 16,
-            paddingTop: 8,
-            paddingBottom: 8,
-            marginTop: -8,
-            marginBottom: -8,
-            alignItems: "center",
-            scrollbarWidth: "none",
-            WebkitOverflowScrolling: "touch",
-            touchAction: "pan-x",
-            maskImage: scrollAtEnd ? "none" : "linear-gradient(to right, black calc(100% - 76px), transparent 100%)",
-            WebkitMaskImage: scrollAtEnd ? "none" : "linear-gradient(to right, black calc(100% - 76px), transparent 100%)",
-            opacity: checkoutDrawerExpanded ? 0 : 1,
-            pointerEvents: checkoutDrawerExpanded ? "none" : "auto",
-            transition: "opacity 0.25s ease",
-          }}
-        >
-          <button type="button" className="action-bar-btn" onClick={() => setSlidePopoverOpen(v => !v)} style={{ height: 46, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
-            <span>{slides[activeIndex]?.label ?? "Front"}</span>
-            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+        {/* Action bar buttons — centered row */}
+        <div style={{
+          display: "flex", gap: 8, alignItems: "center", justifyContent: "center",
+          opacity: checkoutDrawerExpanded ? 0 : 1,
+          pointerEvents: checkoutDrawerExpanded ? "none" : "auto",
+          transition: "opacity 0.25s ease",
+        }}>
+          {/* Add design button */}
+          <button
+            ref={addDesignBtnRef}
+            type="button"
+            className="action-bar-btn"
+            onClick={() => setDesignDrawerOpen(true)}
+            style={{ height: 46, padding: "0 18px", borderRadius: 999, border: "none", background: "#f0f0f0", color: "#111", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, cursor: "pointer" }}
+          >
+            <img src="/icons/icon-image.svg" alt="" style={{ width: 20, height: 20, flexShrink: 0 }} />
+            <img src="/icons/icon-text.svg" alt="" style={{ width: 20, height: 20, flexShrink: 0 }} />
           </button>
-          <button type="button" className="action-bar-btn" onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: 46, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
+          {/* Print technique button */}
+          <button type="button" className="action-bar-btn" onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: 46, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0, cursor: "pointer" }}>
             <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
-            <span>Print</span>
+            <span>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
             <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" onClick={() => setAllProductsDrawerOpen(true)} className="action-bar-btn" style={{ height: 46, padding: "0 16px 0px 4px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600, flexShrink: 0, boxShadow: "0 1px 5px rgba(0,0,0,0.02)", transform: revealed ? "translateY(0)" : "translateY(80px)", transition: revealed ? "transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0ms" : "none" }}>
-            <img src="/icons/products.png" width={"auto"} height={40} style={{ marginTop: -2 }} alt="" />
-            <span>Change product</span>
-          </button>
-          <div style={{ width: 16, flexShrink: 0 }} />
         </div>
-
-        {/* Add design button — absolutely positioned, floats above bar when scrolled */}
-        <button
-          ref={addDesignBtnRef}
-          type="button"
-          className="action-bar-btn"
-          onClick={() => setDesignDrawerOpen(true)}
-          style={{
-            position: "absolute",
-            left: 16,
-            top: barScrollProgress > 0 ? -62 : 12,
-            height: barScrollProgress > 0 ? 54 : 46,
-            padding: barScrollProgress > 0 ? "0" : "0 18px",
-            borderRadius: 999,
-            border: "none",
-            background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)",
-            color: "#fff",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 8,
-            fontSize: 14, fontWeight: 600, flexShrink: 0,
-            boxShadow: barScrollProgress > 0 ? "0 4px 16px rgba(0,0,0,0.35)" : "0 4px 14px rgba(0,0,0,0.2)",
-            overflow: "hidden",
-            boxSizing: "border-box",
-            whiteSpace: "nowrap",
-            zIndex: 2,
-            opacity: checkoutDrawerExpanded ? 0 : 1,
-            pointerEvents: checkoutDrawerExpanded ? "none" : "auto",
-            transition: "top 0.5s cubic-bezier(0.34,1.56,0.64,1), height 0.4s ease, box-shadow 0.4s ease, opacity 0.25s ease",
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}><path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/></svg>
-          <span style={{ opacity: barScrollProgress > 0 ? 0 : 1, transition: "opacity 0.15s ease", ...(barScrollProgress > 0 ? { position: "absolute" as const, left: 38 } : {}) }}>Add design</span>
-        </button>
 
       </div>
 
@@ -2269,7 +2145,16 @@ export default function App() {
         outOfStock={selectedProduct.outOfStock[selectedColor] ?? []}
         sizes={selectedProduct.sizes}
         onAddToCart={() => {
-          setCartCount(c => c + 1);
+          setCartItems(prev => [...prev, {
+            product: selectedProduct.name,
+            color: selectedColor,
+            colorLabel: selectedProduct.colors.find(c => c.key === selectedColor)?.label ?? selectedColor,
+            thumbnail: selectedProduct.thumbnail(selectedColor),
+            quantities: { ...quantities },
+            unitPrice: currentPrice,
+          }]);
+          setCartCount(c => c + (Object.keys(quantities) as string[]).reduce((a: number, k: string) => a + (quantities[k] ?? 0), 0));
+          setQuantities({});
           setCheckoutDrawerExpanded(false);
           setCheckoutDrawerHeight(DRAWER_MIN);
           setTimeout(() => {
@@ -2354,6 +2239,102 @@ export default function App() {
                     <div style={{ padding: "8px 10px 10px", fontSize: 12, fontWeight: 500, color: "#111", lineHeight: 1.4 }}>{name}</div>
                   </button>
                 ))}
+              </div>
+            </div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+
+      {/* Cart drawer */}
+      <Drawer.Root open={cartDrawerOpen} onOpenChange={setCartDrawerOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, outline: "none", fontFamily: '"Inter Variable", sans-serif', display: "flex", flexDirection: "column", maxHeight: "85dvh" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 16px", borderBottom: "1px solid #f0f0f0", flexShrink: 0 }}>
+              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Basket {cartCount > 0 && `(${cartCount})`}</span>
+              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setCartDrawerOpen(false)} />
+            </div>
+            {cartItems.length === 0 ? (
+              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 40, fontSize: 14, color: "#888" }}>Your basket is empty</div>
+            ) : (
+              <div style={{ overflowY: "auto", flex: 1, padding: "16px 16px 40px" }}>
+                {cartItems.map((item, i) => {
+                  const qKeys = (Object.keys(item.quantities) as string[]).filter(k => (item.quantities[k] ?? 0) > 0);
+                  const totalQty = qKeys.reduce((a: number, k: string) => a + (item.quantities[k] ?? 0), 0);
+                  const totalPrice = (totalQty * item.unitPrice).toFixed(2).replace(".", ",") + " €";
+                  return (
+                    <div key={i}>
+                      <div style={{ display: "flex", gap: 12, paddingTop: i > 0 ? 16 : 0, paddingBottom: 16 }}>
+                        <img src={item.thumbnail} alt={item.product} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, flexShrink: 0, background: "#f5f5f5" }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#111", marginBottom: 4, lineHeight: 1.4 }}>{item.product}</div>
+                          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>{item.colorLabel}</div>
+                          <div style={{ fontSize: 12, color: "#555" }}>
+                            {qKeys.map((size: string) => `${size}: ${item.quantities[size]}`).join(", ")}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "space-between", flexShrink: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{totalPrice}</div>
+                          <button type="button" onClick={() => { setCartItems(prev => prev.filter((_, j) => j !== i)); setCartCount(c => Math.max(0, c - totalQty)); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" }}>
+                            <img src="/icons/icon-trash.svg" alt="Remove" style={{ width: 18, height: 18, opacity: 0.45 }} />
+                          </button>
+                        </div>
+                      </div>
+                      {i < cartItems.length - 1 && <div style={{ height: 1, background: "#f0f0f0" }} />}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {cartItems.length > 0 && (
+              <div style={{ padding: "12px 16px 40px", borderTop: "1px solid #f0f0f0", flexShrink: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, fontSize: 15, fontWeight: 700, color: "#111" }}>
+                  <span>Total</span>
+                  <span>{cartItems.reduce((sum: number, item) => sum + (Object.keys(item.quantities) as string[]).reduce((a: number, k: string) => a + (item.quantities[k] ?? 0), 0) * item.unitPrice, 0).toFixed(2).replace(".", ",") + " €"}</span>
+                </div>
+                <button type="button" style={{ width: "100%", height: 52, borderRadius: 12, border: "none", background: "#111", color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
+                  Checkout
+                </button>
+              </div>
+            )}
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+
+      <Drawer.Root open={moreMenuDrawerOpen} onOpenChange={setMoreMenuDrawerOpen}>
+        <Drawer.Portal>
+          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
+          <Drawer.Content style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#f2f2f2", borderTopLeftRadius: 16, borderTopRightRadius: 16, outline: "none", fontFamily: '"Inter Variable", sans-serif', paddingBottom: 40 }}>
+            <div style={{ width: 36, height: 4, borderRadius: 99, background: "#d0d0d0", margin: "12px auto 12px" }} />
+            <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+              {/* See all products — solo group */}
+              <div style={{ background: "#fff", borderRadius: 14, overflow: "hidden" }}>
+                <button type="button" onClick={() => { setMoreMenuDrawerOpen(false); setAllProductsDrawerOpen(true); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "0 16px 0 8px", height: 64, background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+                  <img src="/icons/products.png" height={48} width="auto" style={{ display: "block", flexShrink: 0 }} alt="" />
+                  <span style={{ fontSize: 15, fontWeight: 500, color: "#111" }}>See all products</span>
+                </button>
+              </div>
+              {/* Share + Add to favourites group */}
+              <div style={{ background: "#fff", borderRadius: 14, overflow: "hidden" }}>
+                {[
+                  { label: "Share", icon: "/icons/icon-share.svg" },
+                  { label: "Add to favourites", icon: "/icons/icon-heart.svg" },
+                ].map(({ label, icon }, i) => (
+                  <div key={label}>
+                    <button type="button" style={{ width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "0 16px", height: 56, background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+                      <img src={icon} alt="" style={{ width: 22, height: 22 }} />
+                      <span style={{ fontSize: 15, fontWeight: 500, color: "#111" }}>{label}</span>
+                    </button>
+                    {i === 0 && <div style={{ height: 1, background: "#f0f0f0", margin: "0 16px" }} />}
+                  </div>
+                ))}
+              </div>
+              {/* Contact customer service — solo group */}
+              <div style={{ background: "#fff", borderRadius: 14, overflow: "hidden" }}>
+                <button type="button" style={{ width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "0 16px", height: 56, background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+                  <img src="/icons/icon-phone.svg" alt="" style={{ width: 22, height: 22 }} />
+                  <span style={{ fontSize: 15, fontWeight: 500, color: "#111" }}>Contact customer service</span>
+                </button>
               </div>
             </div>
           </Drawer.Content>
