@@ -210,6 +210,7 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("cartCount") || "0"); } catch { return 0; }
   });
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   useEffect(() => { localStorage.setItem("cartItems", JSON.stringify(cartItems)); }, [cartItems]);
   useEffect(() => { localStorage.setItem("cartCount", JSON.stringify(cartCount)); }, [cartCount]);
   const [toastVisible, setToastVisible] = useState(false);
@@ -251,6 +252,7 @@ export default function App() {
 
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
   const [designGestureActive, setDesignGestureActive] = useState(false);
+  const [snapGuides, setSnapGuides] = useState<{ h: boolean; v: boolean }>({ h: false, v: false });
 
   const hasAnyItems = Object.keys(allDesignItems).some((k) => (allDesignItems[k] as DesignItem[]).length > 0);
   const activeIsEmpty = designItems.length === 0;
@@ -348,6 +350,7 @@ export default function App() {
     const next = dy > THRESHOLD ? true : dy < -THRESHOLD ? false : checkoutDrawerHeight > midpoint;
     setCheckoutDrawerExpanded(next);
     setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
+    if (!next && checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0;
     setCheckoutDrawerDragging(false);
     checkoutDrawerDragDirection.current = "none";
     d.active = false;
@@ -872,22 +875,30 @@ export default function App() {
     const dy = (e.touches[0].clientY - g.startTy) / zoom;
     const pa = currentPARef.current;
     if (!pa) return;
-    setDesignItems(items => items.map(item => {
-      if (item.id !== g.itemId) return item;
-      const measured = itemSizeRefs.current.get(item.id);
+    if (g.type === "move") {
+      const measured = itemSizeRefs.current.get(g.itemId);
       const itemW = measured?.w ?? g.startW;
-      const itemH = measured?.h ?? (item.type === "image" ? item.w : item.fontSize * 1.5);
-      // x,y is the CSS left/top, but items use translate(-50%,-50%) for images
-      // and translateX(-50%) for text, so constrain from the visual center/edge
+      const itemH = measured?.h ?? g.startW;
       const halfW = itemW / 2;
       const halfH = itemH / 2;
-      if (g.type === "move") {
+      const SNAP_THRESHOLD = 10;
+      const rawX = Math.max(halfW, Math.min(pa.width - halfW, g.startX + dx));
+      const rawY = Math.max(halfH, Math.min(pa.height - halfH, g.startY + dy));
+      const snapH = Math.abs(rawY - pa.height / 2) < SNAP_THRESHOLD;
+      const snapV = Math.abs(rawX - pa.width  / 2) < SNAP_THRESHOLD;
+      setSnapGuides({ h: snapH, v: snapV });
+      setDesignItems(items => items.map(item => {
+        if (item.id !== g.itemId) return item;
         return {
           ...item,
-          x: Math.max(halfW, Math.min(pa.width - halfW, g.startX + dx)),
-          y: Math.max(halfH, Math.min(pa.height - halfH, g.startY + dy)),
+          x: snapV ? pa.width  / 2 : rawX,
+          y: snapH ? pa.height / 2 : rawY,
         };
-      }
+      }));
+      return;
+    }
+    setDesignItems(items => items.map(item => {
+      if (item.id !== g.itemId) return item;
       // Uniform scale from opposite (anchor) corner
       const tx = e.touches[0].clientX;
       const ty = e.touches[0].clientY;
@@ -923,6 +934,7 @@ export default function App() {
     designGestureRef.current = { type: "idle" };
     if (g.type !== "idle") pendingSnapItemId.current = g.itemId;
     setDesignGestureActive(false);
+    setSnapGuides({ h: false, v: false });
   };
 
   // Snap runs in a useEffect so it always fires after all gesture state updates
@@ -1052,9 +1064,12 @@ export default function App() {
       </div>
 
       {/* Header */}
-      <div style={{ background: "#fff", height: HEADER, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", flexShrink: 0, position: "relative", zIndex: 20 }}>
+      <div style={{ background: "#fff", height: HEADER, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", flexShrink: 0, position: "relative", zIndex: 20, overflow: "hidden" }}>
         <img src="/icons/Logo.svg" alt="Spreadshirt" style={{ height: 22, objectFit: "contain" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button type="button" onClick={() => setSearchOpen(true)} style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex" }}>
+            <img src="/icons/icon-search.svg" alt="Search" style={{ width: 24, height: 24 }} />
+          </button>
           <button type="button" onClick={() => setCartDrawerOpen(true)} style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex", position: "relative" }}>
             <img src="/icons/icon-cart.svg" alt="Cart" style={{ width: 24, height: 24 }} />
             {cartCount > 0 && (
@@ -1065,6 +1080,86 @@ export default function App() {
           </button>
           <button type="button" style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex" }}>
             <img src="/icons/icon-hamburger-menusvg.svg" alt="Menu" style={{ width: 24, height: 24 }} />
+          </button>
+        </div>
+      </div>
+
+      {/* Search backdrop */}
+      <div
+        onClick={() => setSearchOpen(false)}
+        style={{
+          position: "fixed", inset: 0, zIndex: 99,
+          backdropFilter: searchOpen ? "blur(2px)" : "none",
+          WebkitBackdropFilter: searchOpen ? "blur(2px)" : "none",
+          background: searchOpen ? "rgba(0,0,0,0.15)" : "transparent",
+          opacity: searchOpen ? 1 : 0,
+          pointerEvents: searchOpen ? "auto" : "none",
+          transition: "opacity 0.25s ease",
+        }}
+      />
+
+      {/* Search panel */}
+      <div style={{
+        position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
+        background: "#fff",
+        boxShadow: searchOpen ? "0 4px 20px rgba(0,0,0,0.1)" : "none",
+        opacity: searchOpen ? 1 : 0,
+        transform: searchOpen ? "translateY(0)" : "translateY(-100%)",
+        transition: "opacity 0.25s ease, transform 0.25s ease",
+        pointerEvents: searchOpen ? "auto" : "none",
+      }}>
+        {/* Search input row */}
+        <div style={{ height: 56, display: "flex", alignItems: "center", padding: "0 12px", gap: 8 }}>
+          <img src="/icons/icon-search.svg" alt="" style={{ width: 20, height: 20, flexShrink: 0, opacity: 0.4 }} />
+          <input
+            autoFocus={searchOpen}
+            type="text"
+            placeholder="Search..."
+            style={{ flex: 1, border: "none", outline: "none", fontSize: 16, fontFamily: '"Inter Variable", sans-serif', background: "transparent", color: "#111" }}
+          />
+          <button type="button" onClick={() => setSearchOpen(false)} style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex", flexShrink: 0 }}>
+            <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 22, height: 22 }} />
+          </button>
+        </div>
+        {/* Divider */}
+        <div style={{ height: 1, background: "#f0f0f0" }} />
+        {/* Product horizontal scroll */}
+        <div style={{ overflowX: "auto", display: "flex", gap: 12, padding: "16px", scrollbarWidth: "none" }}>
+          {[
+            { productId: "unisex-hoodie",           name: "Unisex Hoodie",                    thumbnail: PRODUCT_CONFIGS["unisex-hoodie"].thumbnail(PRODUCT_CONFIGS["unisex-hoodie"].defaultColor) },
+            { productId: null, name: "Organic Tote Bag",           thumbnail: `/img/product-images/organic-tote-bag/organic-tote-bag-beige.webp` },
+            { productId: null, name: "Relaxed Vintage Cap",        thumbnail: `/img/product-images/relaxed-vintage-cap/relaxed-vintage cap-green.webp` },
+            { productId: null, name: "Stripped Tennis Socks",      thumbnail: `/img/product-images/stripped-tennis-socks/stripped-tennis-socks-whitemint.webp` },
+            { productId: null, name: "Women Boxy Organic T-shirt", thumbnail: `/img/product-images/women-boxy-organic-tshirt/women-boxy-organic-tshirt-yellow.webp` },
+            { productId: null, name: "Women Cropped Tank",         thumbnail: `/img/product-images/women-cropped-tank/women-cropped-tank-black.webp` },
+          ].filter(({ productId }) => productId !== selectedProductId).map(({ productId, name, thumbnail }) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => {
+                if (!productId) return;
+                const cfg = PRODUCT_CONFIGS[productId];
+                setSelectedProductId(productId);
+                setSelectedColor(cfg.defaultColor);
+                setIndex(0);
+                setActiveIndex(0);
+                setSearchOpen(false);
+              }}
+              style={{ flexShrink: 0, width: 130, background: "#f7f7f7", border: selectedProductId === productId ? "2px solid #111" : "1px solid #e8e8e8", borderRadius: 12, overflow: "hidden", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0 }}
+            >
+              <img src={thumbnail} alt={name} style={{ width: "100%", aspectRatio: "1/1", objectFit: "cover", display: "block" }} />
+              <div style={{ padding: "6px 8px 8px", fontSize: 11, fontWeight: 500, color: "#111", lineHeight: 1.4 }}>{name}</div>
+            </button>
+          ))}
+        </div>
+        {/* See all products */}
+        <div style={{ padding: "0 16px 16px" }}>
+          <button
+            type="button"
+            onClick={() => { setSearchOpen(false); setAllProductsDrawerOpen(true); }}
+            style={{ width: "100%", height: 46, borderRadius: 12, border: "1px solid #e8e8e8", background: "#f7f7f7", fontSize: 14, fontWeight: 600, color: "#111", cursor: "pointer", fontFamily: '"Inter Variable", sans-serif' }}
+          >
+            See all products
           </button>
         </div>
       </div>
@@ -1150,6 +1245,26 @@ export default function App() {
                 transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
                 transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${(editorSize.height - EDITOR_BOTTOM_OFFSET) / 2 - currentPA.top}px`,
               }} />
+
+              {/* Snap guide lines */}
+              {(snapGuides.h || snapGuides.v) && (
+                <div style={{
+                  position: "absolute",
+                  left: currentPA.left, top: currentPA.top,
+                  width: currentPA.width, height: currentPA.height,
+                  pointerEvents: "none",
+                  zIndex: 17,
+                  transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
+                  transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${(editorSize.height - EDITOR_BOTTOM_OFFSET) / 2 - currentPA.top}px`,
+                }}>
+                  {snapGuides.h && (
+                    <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "#FF3B30", transform: "translateY(-50%)" }} />
+                  )}
+                  {snapGuides.v && (
+                    <div style={{ position: "absolute", top: 0, bottom: 0, left: "50%", width: 1, background: "#FF3B30", transform: "translateX(-50%)" }} />
+                  )}
+                </div>
+              )}
 
               {/* Design items — same transform as print area so they zoom/pan in sync and stay locked to their position */}
               <div style={{
@@ -1391,7 +1506,7 @@ export default function App() {
             opacity: interp,
             pointerEvents: interp > 0.05 ? "auto" : "none",
             transition: checkoutDrawerDragging ? "none" : "opacity 0.4s ease",
-          }} onClick={() => { setCheckoutDrawerExpanded(false); setCheckoutDrawerHeight(DRAWER_MIN); }} />
+          }} onClick={() => { setCheckoutDrawerExpanded(false); setCheckoutDrawerHeight(DRAWER_MIN); if (checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0; }} />
         );
       })()}
 
@@ -1483,6 +1598,7 @@ export default function App() {
                 const next = !checkoutDrawerExpanded;
                 setCheckoutDrawerExpanded(next);
                 setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
+                if (!next && checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0;
               }}
               style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#fff", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 12 }}
             >
@@ -1683,6 +1799,7 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+
               </div>
             );
           })()}
@@ -1703,10 +1820,10 @@ export default function App() {
       </div>
 
       {/* Bottom action bar */}
-      <div id="action-bar" style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
+      <div id="action-bar" style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId || (showPopup && !hasAnyItems) ? 0 : 1, pointerEvents: selectedDesignId || (showPopup && !hasAnyItems) ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
 
         {/* Change product button — shown only when ck-drawer is at MAX */}
-        <div style={{ position: "absolute", inset: 0, zIndex: 17, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(60px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: checkoutDrawerExpanded ? "opacity 0s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.25s" : "opacity 0.15s ease 0s, transform 0.15s ease 0s" }}>
+        {/* <div style={{ position: "absolute", inset: 0, zIndex: 17, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(60px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: checkoutDrawerExpanded ? "opacity 0s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.25s" : "opacity 0.15s ease 0s, transform 0.15s ease 0s" }}>
           <button
             type="button"
             onClick={() => setAllProductsDrawerOpen(true)}
@@ -1714,31 +1831,35 @@ export default function App() {
           >
             Change this product
           </button>
-        </div>
+        </div> */}
 
-        {/* Action bar buttons — centered row */}
+        {/* Action bar buttons */}
         <div style={{
-          display: "flex", gap: 8, alignItems: "center", justifyContent: "center",
+          display: "flex", gap: 8, alignItems: "center", justifyContent: "center", padding: "0 16px",
           opacity: checkoutDrawerExpanded ? 0 : 1,
           pointerEvents: checkoutDrawerExpanded ? "none" : "auto",
           transition: "opacity 0.25s ease",
         }}>
-          {/* Add design button */}
+          {hasAnyItems && (
+            <button
+              type="button"
+              className="action-bar-btn"
+              onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }}
+              style={{ height: 46, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+            >
+              <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ filter: "brightness(0) invert(1) brightness(0.416)" }} />
+              <span>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
+              <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+            </button>
+          )}
           <button
-            ref={addDesignBtnRef}
             type="button"
             className="action-bar-btn"
             onClick={() => setDesignDrawerOpen(true)}
-            style={{ height: 46, padding: "0 18px", borderRadius: 999, border: "none", background: "#f0f0f0", color: "#111", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600, flexShrink: 0, cursor: "pointer" }}
+            style={{ height: 46, padding: "0 18px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
           >
-            <img src="/icons/icon-image.svg" alt="" style={{ width: 20, height: 20, flexShrink: 0 }} />
-            <img src="/icons/icon-text.svg" alt="" style={{ width: 20, height: 20, flexShrink: 0 }} />
-          </button>
-          {/* Print technique button */}
-          <button type="button" className="action-bar-btn" onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }} style={{ height: 46, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, flexShrink: 0, cursor: "pointer" }}>
-            <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
-            <span>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
-            <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
+            <img src="/icons/icon-plus.svg" width={20} height={20} alt="" style={{ filter: "brightness(0) invert(1) brightness(0.416)" }} />
+            <span>Add design/text</span>
           </button>
         </div>
 
@@ -2221,13 +2342,13 @@ export default function App() {
             <div style={{ overflowY: "auto", flex: 1, padding: "0 16px 24px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 {[
-                  { productId: "oversized-unisex-tshirt", name: "Stanley/Stella Oversized Unisex Organic T-shirt Blaster 2.0", thumbnail: PRODUCT_CONFIGS["oversized-unisex-tshirt"].thumbnail(PRODUCT_CONFIGS["oversized-unisex-tshirt"].defaultColor) },
                   { productId: "unisex-hoodie",           name: "Unisex Hoodie",                thumbnail: PRODUCT_CONFIGS["unisex-hoodie"].thumbnail(PRODUCT_CONFIGS["unisex-hoodie"].defaultColor) },
                   { productId: null, name: "Organic Tote Bag",           thumbnail: `/img/product-images/organic-tote-bag/organic-tote-bag-beige.webp` },
                   { productId: null, name: "Relaxed Vintage Cap",        thumbnail: `/img/product-images/relaxed-vintage-cap/relaxed-vintage cap-green.webp` },
                   { productId: null, name: "Stripped Tennis Socks",      thumbnail: `/img/product-images/stripped-tennis-socks/stripped-tennis-socks-whitemint.webp` },
                   { productId: null, name: "Women Boxy Organic T-shirt", thumbnail: `/img/product-images/women-boxy-organic-tshirt/women-boxy-organic-tshirt-yellow.webp` },
                   { productId: null, name: "Women Cropped Tank",         thumbnail: `/img/product-images/women-cropped-tank/women-cropped-tank-black.webp` },
+                  { productId: "oversized-unisex-tshirt", name: "Stanley/Stella Oversized Unisex Organic T-shirt Blaster 2.0", thumbnail: PRODUCT_CONFIGS["oversized-unisex-tshirt"].thumbnail(PRODUCT_CONFIGS["oversized-unisex-tshirt"].defaultColor) },
                 ].map(({ productId, name, thumbnail }) => (
                   <button
                     key={name}
