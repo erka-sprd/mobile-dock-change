@@ -1332,11 +1332,11 @@ export default function App() {
               <img src="/icons/icon-arrow-return-back.svg" alt="Undo" style={{ width: 20, height: 20 }} />
             </button>
           </div>
-          <button type="button" onClick={() => setSlidePopoverOpen(v => !v)} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
+          <button type="button" onClick={() => setSlidePopoverOpen(v => !v)} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
             <span>{slides[activeIndex]?.label ?? "Front"}</span>
             <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" onClick={() => setMoreMenuDrawerOpen(true)} style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+          <button type="button" onClick={() => setMoreMenuDrawerOpen(true)} style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
             <img src="/icons/icon-dots-horizontal.svg" width={20} height={20} alt="More" />
           </button>
         </div>
