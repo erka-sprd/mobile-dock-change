@@ -28,6 +28,22 @@ type ProductConfig = {
   thumbnail: (colorKey: string) => string;
 };
 
+const COLOR_HEX: Record<string, string> = {
+  black:       "#1A1A1A",
+  heathergrey: "#A8A8A8",
+  khaki:       "#504A33",
+  mocha:       "#7D5C4D",
+  navyblue:    "#1C2D50",
+  pinkjoy:     "#F0A0B8",
+  softEcru:    "#EDE0CA",
+  stone:       "#8A7F74",
+  violet:      "#9398BF",
+  white:       "#FFFFFF",
+  gray:        "#9E9E9E",
+  graugrun:    "#6B7B6A",
+  yellow:      "#F0CE3C",
+};
+
 const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
   "oversized-unisex-tshirt": {
     id: "oversized-unisex-tshirt",
@@ -1498,43 +1514,35 @@ export default function App() {
               </div>
             );
           })()}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 0, padding: "0 20px", marginBottom: 14 }}>
-            {selectedProduct.colors.map(({ key, label }, i) => {
-              const borderInterp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
-              const COLS = 6;
-              const total = selectedProduct.colors.length;
-              const col = i % COLS;
-              const hasRight = (i + 1 < total) && ((i + 1) % COLS !== 0);
-              const hasLeft = col > 0;
-              const hasAbove = i >= COLS;
-              const hasBelow = i + COLS < total;
-              const R = 8;
-              return (
+          {(() => { const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))); return (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 20px", marginBottom: 14, marginTop: `${8 - interp * 8}px`, transition: checkoutDrawerDragging ? "none" : "margin-top 0.3s ease" }}>
+            {selectedProduct.colors.map(({ key, label }) => (
                 <button
                   key={key}
                   type="button"
                   aria-label={label}
                   onClick={() => setSelectedColor(key)}
                   style={{
-                    flex: "0 0 calc(100% / 6)", aspectRatio: "1 / 1",
-                    borderTopLeftRadius: !hasAbove && !hasLeft ? R : 0,
-                    borderTopRightRadius: !hasAbove && !hasRight ? R : 0,
-                    borderBottomLeftRadius: !hasBelow && !hasLeft ? R : 0,
-                    borderBottomRightRadius: !hasBelow && !hasRight ? R : 0,
-                    border: key === selectedColor ? `1px solid rgba(17,17,17,${borderInterp})` : `1px solid rgba(208,208,208,${borderInterp})`,
+                    flex: "0 0 calc((100% - 42px) / 8)", aspectRatio: "1 / 1",
+                    borderRadius: "50%",
+                    border: "none",
                     background: "none",
-                    padding: 8, boxSizing: "border-box", overflow: "hidden",
+                    padding: 0, boxSizing: "border-box", overflow: "visible",
                     cursor: "pointer", position: "relative",
-                    zIndex: key === selectedColor ? 1 : 0,
-                    marginRight: -1, marginBottom: -1,
-                    transition: "border-color 0.2s ease",
+                    display: "flex", alignItems: "center", justifyContent: "center",
                   }}
                 >
-                  <img src={selectedProduct.thumbnail(key)} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  <div style={{ width: "75%", height: "75%", borderRadius: "50%", background: COLOR_HEX[key] ?? "#ccc", boxShadow: key === selectedColor ? `0 0 0 2px #F4F4F4, 0 0 0 3px #111` : `0 0 0 2px #F4F4F4, 0 0 0 3px #d0d0d0`, display: "flex", alignItems: "center", justifyContent: "center", transition: "box-shadow 0.2s ease" }}>
+                    {key === selectedColor && (
+                      <svg width="45%" height="45%" viewBox="0 0 24 24" fill="none" stroke={key === "white" || key === "softEcru" || key === "yellow" || key === "pinkjoy" ? "#555" : "#fff"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </div>
                 </button>
-              );
-            })}
+            ))}
           </div>
+          ); })()}
 
           {/* Available sizes + CTA buttons — fade in as ck-drawer expands */}
           {(() => {
