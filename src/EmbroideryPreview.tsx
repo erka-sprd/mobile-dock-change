@@ -198,7 +198,7 @@ function applyRaisedEmboss(ctx: CanvasRenderingContext2D, imageData: ImageData, 
   ctx.restore();
 }
 
-function renderEmbroidery(imageData: ImageData, width: number, height: number): HTMLCanvasElement {
+export function renderEmbroidery(imageData: ImageData, width: number, height: number): HTMLCanvasElement {
   const renderCanvas = document.createElement("canvas");
   renderCanvas.width = width; renderCanvas.height = height;
   const rctx = renderCanvas.getContext("2d", { willReadFrequently: true })!;

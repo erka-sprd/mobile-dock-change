@@ -52,7 +52,7 @@ export default function SizeSelection({ open, onOpenChange, quantities, setQuant
                         type="button"
                         disabled={oos || qty === 0}
                         onClick={() => setQuantities(q => ({ ...q, [size]: Math.max(0, (q[size] ?? 0) - 1) }))}
-                        style={{ width: 36, height: 36, borderRadius: 0, border: "1px solid #d0d0d0", background: "#fff", fontSize: 22, fontWeight: 300, display: "flex", alignItems: "center", justifyContent: "center", cursor: qty === 0 || oos ? "default" : "pointer", color: "#111" }}
+                        style={{ width: 36, height: 36, borderRadius: 0, border: "1px solid #d0d0d0", background: "#fff", fontSize: 22, fontWeight: 300, display: "flex", alignItems: "center", justifyContent: "center", cursor: qty === 0 || oos ? "default" : "pointer", color: "#111", opacity: qty === 0 || oos ? 0.4 : 1 }}
                       >−</button>
                       <span style={{ width: 36, height: 36, boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", fontSize: 15, fontWeight: 600, borderTop: "1px solid #d0d0d0", borderBottom: "1px solid #d0d0d0", borderLeft: "none", borderRight: "none" }}>{qty}</span>
                       <button
@@ -84,7 +84,7 @@ export default function SizeSelection({ open, onOpenChange, quantities, setQuant
               type="button"
               disabled={!hasAny}
               onClick={() => { if (!hasAny) return; onAddToCart?.(); onOpenChange(false); }}
-              style={{ width: "100%", height: 52, borderRadius: 12, border: "none", background: hasAny ? "#111" : "#ccc", color: "#fff", fontSize: 16, fontWeight: 700, cursor: hasAny ? "pointer" : "default" }}
+              style={{ width: "100%", height: 52, borderRadius: 0, border: "none", background: hasAny ? "#111" : "#ccc", color: "#fff", fontSize: 16, fontWeight: 700, cursor: hasAny ? "pointer" : "default" }}
             >
               Add to cart
             </button>
