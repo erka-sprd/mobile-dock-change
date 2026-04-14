@@ -236,6 +236,12 @@ export default function App() {
   const popupZoomRef = useRef(1);
   const popupPanRef = useRef({ x: 0, y: 0 });
   const popupGestureRef = useRef<{ initDist: number; initScale: number; startX: number; startY: number; initPanX: number; initPanY: number; } | null>(null);
+  const previewImgZoom = useRef(1);
+  const previewImgPan = useRef({ x: 0, y: 0 });
+  const [previewImgTransform, setPreviewImgTransform] = useState({ zoom: 1, x: 0, y: 0 });
+  const previewImgGesture = useRef<{ type: "pinch" | "pan"; startDist: number; startZoom: number; startPanX: number; startPanY: number; startTx: number; startTy: number } | null>(null);
+  const previewImgLastTap = useRef(0);
+  const previewImgContainerRef = useRef<HTMLDivElement>(null);
   const popupImgRef = useRef<HTMLDivElement>(null);
   const [popupZoom, setPopupZoom] = useState(1);
   const [popupPan, setPopupPan] = useState({ x: 0, y: 0 });
@@ -245,6 +251,7 @@ export default function App() {
   const [embroideryDataUrl, setEmbroideryDataUrl] = useState<string | null>(null);
   const [embroideryRenderedUrl, setEmbroideryRenderedUrl] = useState<string | null>(null);
   const [designBbox, setDesignBbox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
   type DesignItem = { id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number; color?: string; };
   const [allDesignItems, setAllDesignItems] = useState<Record<string, DesignItem[]>>(() => {
     try {
@@ -657,6 +664,30 @@ export default function App() {
 
 
   useEffect(() => { currentPARef.current = currentPA; }, [currentPA]);
+
+  // Reset preview image zoom/pan when drawer closes
+  useEffect(() => {
+    if (!previewDrawerOpen) {
+      previewImgZoom.current = 1;
+      previewImgPan.current = { x: 0, y: 0 };
+      setPreviewImgTransform({ zoom: 1, x: 0, y: 0 });
+      previewImgGesture.current = null;
+    }
+  }, [previewDrawerOpen]);
+
+  // Non-passive touch listeners on preview image container to block Vaul drag/scroll during gestures
+  useEffect(() => {
+    const el = previewImgContainerRef.current;
+    if (!el) return;
+    const onStart = (e: TouchEvent) => { if (e.touches.length >= 2) e.preventDefault(); };
+    const onMove = (e: TouchEvent) => { if (previewImgGesture.current) e.preventDefault(); };
+    el.addEventListener("touchstart", onStart, { passive: false });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+    };
+  }, []);
 
   const TEXT_OPTIONS = [
     { content: "Love",           color: "#F06292" },
@@ -2298,12 +2329,12 @@ export default function App() {
       <Drawer.Root open={previewDrawerOpen} onOpenChange={(open) => { if (!open) setPrintTechnique(savedPrintTechnique); setPreviewDrawerOpen(open); }}>
         <Drawer.Portal>
           <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
-          <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 20, paddingBottom: 40, outline: "none", fontFamily: '"Inter Variable", sans-serif' }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingLeft: 16, paddingRight: 16 }}>
+          <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, outline: "none", fontFamily: '"Inter Variable", sans-serif', display: "flex", flexDirection: "column", height: "calc(100dvh - 32px)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 16px", flexShrink: 0 }}>
               <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Print technique</span>
               <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setPreviewDrawerOpen(false)} />
             </div>
-            <div style={{ display: "flex", paddingLeft: 16, paddingRight: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", paddingLeft: 16, paddingRight: 16, marginBottom: 16, flexShrink: 0 }}>
               <div style={{ display: "flex", borderRadius: 999, background: "#f0f0f0", padding: 4, gap: 4, width: "100%" }}>
                 <button type="button" onClick={() => { setPrintTechnique("standard"); setSavedPrintTechnique("standard"); }} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "standard" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                   <img src="/icons/icon-droplet.svg" width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
@@ -2315,12 +2346,11 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 12, marginBottom: 20, overflowX: previewLoading ? "hidden" : "auto", paddingLeft: 16, paddingRight: 16, scrollbarWidth: "none" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: 24, overflowY: "auto", flex: 1, minHeight: 0, touchAction: "pan-y" }}>
               {previewLoading ? (
                 <>
-                  {[0, 1, 2].map(i => (
-                    <div key={i} style={{ flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "linear-gradient(90deg, #ebebeb 25%, #d6d6d6 50%, #ebebeb 75%)", backgroundSize: "200% 100%", animation: "skeletonShimmer 1.4s ease infinite" }} />
-                  ))}
+                  <div style={{ width: "100%", height: 200, flexShrink: 0, borderRadius: 0, background: "linear-gradient(90deg, #ebebeb 25%, #d6d6d6 50%, #ebebeb 75%)", backgroundSize: "200% 100%", animation: "skeletonShimmer 1.4s ease infinite" }} />
+                  <div style={{ width: "100%", height: 200, flexShrink: 0, borderRadius: 0, background: "linear-gradient(90deg, #ebebeb 25%, #d6d6d6 50%, #ebebeb 75%)", backgroundSize: "200% 100%", animation: "skeletonShimmer 1.4s ease infinite" }} />
                 </>
               ) : (
                 <>
@@ -2331,7 +2361,7 @@ export default function App() {
                     const paCx = pa ? pa.x + pa.w / 2 : 0.5;
                     const paCy = pa ? pa.y + pa.h / 2 : 0.5;
                     return (
-                      <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#e8e8e8" }}>
+                      <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: "100%", height: 245, borderRadius: 0, background: "#e8e8e8" }}>
                         <img
                           src={selectedProduct.thumbnail(selectedColor)}
                           alt=""
@@ -2365,30 +2395,123 @@ export default function App() {
                       </div>
                     );
                   })()}
+                  {/* 2 — model front (commented out for scroll test) */}
+                  {/* {(() => {
+                    const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
+                    const pa = selectedProduct.printAreas["Front"];
+                    const leftPct   = (pa.x + (designBbox ? designBbox.left  * pa.w : 0)) * 100;
+                    const topPct    = (pa.y + (designBbox ? designBbox.top   * pa.h : 0)) * 100;
+                    const widthPct  = (designBbox ? designBbox.width  * pa.w : pa.w) * 100;
+                    const heightPct = (designBbox ? designBbox.height * pa.h : pa.h) * 100;
+                    return (
+                      <div style={{ position: "relative", overflow: "hidden", width: "100%", borderRadius: 0, background: "#f4f4f4" }}>
+                        <img src={selectedProductId === "oversized-unisex-tshirt" ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp` : selectedProduct.thumbnail(selectedColor)} alt="Model Front" style={{ width: "100%", height: "auto", display: "block", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                        {previewUrl && (
+                          <div style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, width: `${widthPct}%`, height: `${heightPct}%`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <img src={previewUrl} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()} */}
                   {/* 2 — model front */}
-                  {/* <div onClick={() => { setModelPopupOpen(true); popupZoomRef.current = 1; popupPanRef.current = { x: 0, y: 0 }; setPopupZoom(1); setPopupPan({ x: 0, y: 0 }); }} style={{ ... popup trigger ... }} /> */}
-                  <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: 310, height: 245, borderRadius: 12, background: "#f4f4f4" }}>
-                    <img src={selectedProductId === "oversized-unisex-tshirt" ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp` : selectedProduct.thumbnail(selectedColor)} alt="Model Front" style={{ width: "100%", height: "100%", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                    {(() => {
-                      const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
-                      if (!previewUrl) return null;
-                      const cardW = 310, cardH = 245;
-                      const pa = selectedProduct.printAreas["Front"];
-                      const paLeft = pa.x * cardW;
-                      const paTop = pa.y * cardH;
-                      const paW = pa.w * cardW;
-                      const paH = pa.h * cardH;
-                      const left   = designBbox ? paLeft + designBbox.left  * paW : paLeft;
-                      const top    = designBbox ? paTop  + designBbox.top   * paH : paTop;
-                      const width  = designBbox ? designBbox.width  * paW : paW;
-                      const height = designBbox ? designBbox.height * paH : paH;
-                      return (
-                        <div style={{ position: "absolute", left, top, width, height, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <img src={previewUrl} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                        </div>
-                      );
-                    })()}
-                  </div>
+                  {(() => {
+                    const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
+                    const pa = selectedProduct.printAreas["Front"];
+                    const leftPct   = (pa.x + (designBbox ? designBbox.left  * pa.w : 0)) * 100;
+                    const topPct    = (pa.y + (designBbox ? designBbox.top   * pa.h : 0)) * 100;
+                    const widthPct  = (designBbox ? designBbox.width  * pa.w : pa.w) * 100;
+                    const heightPct = (designBbox ? designBbox.height * pa.h : pa.h) * 100;
+                    return (
+                      <div
+                        ref={previewImgContainerRef}
+                        style={{ position: "relative", overflow: "hidden", width: "100%", height: 600, flexShrink: 0, borderRadius: 0, background: "#f4f4f4", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "pan-y" }}
+                        onTouchStart={(e) => {
+                          e.stopPropagation();
+                          if (e.touches.length === 2) {
+                            const dx = e.touches[1].clientX - e.touches[0].clientX;
+                            const dy = e.touches[1].clientY - e.touches[0].clientY;
+                            previewImgGesture.current = {
+                              type: "pinch",
+                              startDist: Math.sqrt(dx * dx + dy * dy),
+                              startZoom: previewImgZoom.current,
+                              startPanX: previewImgPan.current.x,
+                              startPanY: previewImgPan.current.y,
+                              startTx: 0, startTy: 0,
+                            };
+                          } else if (e.touches.length === 1) {
+                            const now = Date.now();
+                            if (now - previewImgLastTap.current < 300) {
+                              previewImgZoom.current = 1;
+                              previewImgPan.current = { x: 0, y: 0 };
+                              setPreviewImgTransform({ zoom: 1, x: 0, y: 0 });
+                              previewImgGesture.current = null;
+                              previewImgLastTap.current = 0;
+                              return;
+                            }
+                            previewImgLastTap.current = now;
+                            previewImgGesture.current = {
+                              type: "pan",
+                              startDist: 0,
+                              startZoom: previewImgZoom.current,
+                              startPanX: previewImgPan.current.x,
+                              startPanY: previewImgPan.current.y,
+                              startTx: e.touches[0].clientX,
+                              startTy: e.touches[0].clientY,
+                            };
+                          }
+                        }}
+                        onTouchMove={(e) => {
+                          const g = previewImgGesture.current;
+                          if (!g) return;
+                          e.stopPropagation();
+                          const cW = previewImgContainerRef.current?.clientWidth ?? 0;
+                          const cH = previewImgContainerRef.current?.clientHeight ?? 500;
+                          if (g.type === "pinch" && e.touches.length === 2) {
+                            const dx = e.touches[1].clientX - e.touches[0].clientX;
+                            const dy = e.touches[1].clientY - e.touches[0].clientY;
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            const newZoom = Math.max(1, Math.min(4, g.startZoom * (dist / g.startDist)));
+                            const maxX = (newZoom - 1) * cW / 2;
+                            const maxY = (newZoom - 1) * cH / 2;
+                            const x = Math.max(-maxX, Math.min(maxX, g.startPanX));
+                            const y = Math.max(-maxY, Math.min(maxY, g.startPanY));
+                            previewImgZoom.current = newZoom;
+                            previewImgPan.current = { x, y };
+                            setPreviewImgTransform({ zoom: newZoom, x, y });
+                          } else if (g.type === "pan" && e.touches.length === 1) {
+                            const maxX = (g.startZoom - 1) * cW / 2;
+                            const maxY = (g.startZoom - 1) * cH / 2;
+                            const x = Math.max(-maxX, Math.min(maxX, g.startPanX + e.touches[0].clientX - g.startTx));
+                            const y = Math.max(-maxY, Math.min(maxY, g.startPanY + e.touches[0].clientY - g.startTy));
+                            previewImgPan.current = { x, y };
+                            setPreviewImgTransform({ zoom: g.startZoom, x, y });
+                          }
+                        }}
+                        onTouchEnd={(e) => {
+                          if (previewImgGesture.current) {
+                            e.stopPropagation();
+                            e.preventDefault();
+                          }
+                          previewImgGesture.current = null;
+                          previewImgZoom.current = 1;
+                          previewImgPan.current = { x: 0, y: 0 };
+                          setPreviewImgTransform({ zoom: 1, x: 0, y: 0 });
+                        }}
+                      >
+                        <img
+                          src={selectedProductId === "oversized-unisex-tshirt" ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp` : selectedProduct.thumbnail(selectedColor)}
+                          alt="Model Front"
+                          style={{ position: "absolute", width: "100%", height: "100%", objectFit: "cover", transform: `translate(${previewImgTransform.x}px, ${previewImgTransform.y}px) scale(${previewImgTransform.zoom})`, transformOrigin: "center center", willChange: "transform", WebkitTouchCallout: "none" } as React.CSSProperties}
+                        />
+                        {previewUrl && (
+                          <div style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, width: `${widthPct}%`, height: `${heightPct}%`, display: "flex", alignItems: "center", justifyContent: "center", transform: `translate(${previewImgTransform.x}px, ${previewImgTransform.y}px) scale(${previewImgTransform.zoom})`, transformOrigin: "center center", willChange: "transform" }}>
+                            <img src={previewUrl} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </>
               )}
             </div>
