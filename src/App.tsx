@@ -281,10 +281,6 @@ export default function App() {
     setTimeout(() => setAnimating(false), 750);
     setCheckoutDrawerExpanded(true);
     setCheckoutDrawerHeight(checkoutDrawerMaxH);
-    setTimeout(() => {
-      setCheckoutDrawerExpanded(false);
-      setCheckoutDrawerHeight(DRAWER_MIN);
-    }, 800);
     requestAnimationFrame(() => requestAnimationFrame(() => setRevealed(true)));
   };
 
@@ -1739,14 +1735,14 @@ export default function App() {
             const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
             const oos = selectedProduct.outOfStock[selectedColor] ?? [];
             return (
-              <div style={{ opacity: interp, transition: "opacity 0.3s ease" }}>
+              <div>
                 {/* Buttons */}
                 <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 8 }}>
                   {hasAnyItems && (
                     <button
                       type="button"
                       onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }}
-                      style={{ width: "100%", height: 54, borderRadius: 0, border: "1px solid #d0d0d0", background: "#fff", color: "#111", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", marginTop: 10 }}
+                      style={{ width: "100%", height: 54, borderRadius: 0, border: "1px solid #d0d0d0", background: "#fff", color: "#111", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", marginTop: 10, opacity: interp }}
                     >
                       <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ filter: "brightness(0)" }} />
                       <span style={{ flex: 1, textAlign: "left" }}>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
@@ -1762,11 +1758,12 @@ export default function App() {
                     <span>Select sizes</span>
                   </button>
                   {oos.length > 0 && (
-                    <div style={{ fontSize: 15, color: "#6a6a6a" }}>
+                    <div style={{ fontSize: 15, color: "#6a6a6a", opacity: interp }}>
                       {oos.slice(0, -1).join(", ")}{oos.length > 1 ? " and " : ""}{oos[oos.length - 1]} out of stock
                     </div>
                   )}
                 </div>
+                <div style={{ opacity: interp }}>
 
                 {/* Shipping info */}
                 <div style={{ border: `1px solid rgba(199,199,199,${interp})`, borderRadius: 0, overflow: "hidden", margin: "16px 20px 0", transition: "border-color 0.3s ease" }}>
@@ -1909,6 +1906,7 @@ export default function App() {
                   </div>
                 </div>
 
+                </div>{/* end opacity interp */}
               </div>
             );
           })()}
