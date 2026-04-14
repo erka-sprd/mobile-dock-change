@@ -62,3 +62,12 @@
   animation: popupDismiss 0.3s cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
+@keyframes sideLabelFadeIn {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.side-label-fade {
+  animation: sideLabelFadeIn 0.3s ease forwards;
+}
+

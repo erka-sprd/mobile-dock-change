@@ -182,6 +182,8 @@ export default function App() {
   const [checkoutDrawerScrolledToBottom, setCheckoutDrawerScrolledToBottom] = useState(false);
   const checkoutDrawerRef = useRef<HTMLDivElement>(null);
   const checkoutDrawerScrollRef = useRef<HTMLDivElement>(null);
+  const otherProductsScrollRef = useRef<HTMLDivElement>(null);
+  const [otherProductsScrollPos, setOtherProductsScrollPos] = useState({ atStart: true, atEnd: false });
   const horizontalGesture = useRef({ startX: 0, startY: 0, locked: false });
   const onHorizontalTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     horizontalGesture.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, locked: false };
@@ -215,6 +217,7 @@ export default function App() {
   const textScrollRef = useRef<HTMLDivElement>(null);
   const textScrollPos = useRef(0);
   const [sizeDrawerOpen, setSizeDrawerOpen] = useState(false);
+  const [sideThumbnails, setSideThumbnails] = useState<Array<{ label: string; src: string; thumbnail: string }>>([]);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [cartItems, setCartItems] = useState<Array<{ product: string; color: string; colorLabel: string; thumbnail: string; quantities: Record<string, number>; unitPrice: number; printTechnique?: "embroidery" | "standard" }>>(() => {
     try { return JSON.parse(localStorage.getItem("cartItems") || "[]"); } catch { return []; }
@@ -251,12 +254,23 @@ export default function App() {
   });
   const currentSlideLabel = slides[activeIndex]?.label ?? "Front";
   const designItems: DesignItem[] = allDesignItems[currentSlideLabel] ?? [];
+  const designHistory = useRef<DesignItem[][]>([]);
+  const pushHistory = () => {
+    const current = allDesignItems[currentSlideLabel] ?? [];
+    designHistory.current = [...designHistory.current.slice(-29), [...current]];
+  };
   const setDesignItems = (updater: DesignItem[] | ((prev: DesignItem[]) => DesignItem[])) => {
     setAllDesignItems(all => {
       const prev = all[currentSlideLabel] ?? [];
       const next = typeof updater === "function" ? updater(prev) : updater;
       return { ...all, [currentSlideLabel]: next };
     });
+  };
+  const undo = () => {
+    if (designHistory.current.length === 0) return;
+    const prev = designHistory.current[designHistory.current.length - 1];
+    designHistory.current = designHistory.current.slice(0, -1);
+    setAllDesignItems(all => ({ ...all, [currentSlideLabel]: prev }));
   };
 
   const designSidesCount = Object.keys(allDesignItems).filter(k => (allDesignItems[k] as DesignItem[]).length > 0).length;
@@ -404,7 +418,7 @@ export default function App() {
   };
 
   const checkoutDrawerShadow = checkoutDrawerExpanded
-    ? "0 -20px 80px rgba(0,0,0,0.1), 0 -4px 24px rgba(0,0,0,0.10)"
+    ? "0 -20px 80px rgba(0,0,0,0.22), 0 -4px 200px rgba(0,0,0,0.25)"
     : "0 -50px 60px rgba(0,0,0,0.12), 0 -4px 20px rgba(0,0,0,0.09)";
 
   const imageGesture = useRef({
@@ -708,6 +722,7 @@ export default function App() {
   const addTextItem = (content = "Team\nGreen", color = "#3F920C") => {
     const pa = currentPARef.current;
     if (!pa) return;
+    pushHistory();
     const id = `text-${Date.now()}`;
     setDesignItems(prev => [...prev, {
       id, type: "text" as const, content,
@@ -723,6 +738,7 @@ export default function App() {
   const addGraphicItem = (src: string) => {
     const pa = currentPARef.current;
     if (!pa) return;
+    pushHistory();
     const size = Math.min(pa.width, pa.height) * 0.5;
     const id = `img-${Date.now()}`;
     setDesignItems(prev => [...prev, {
@@ -951,6 +967,77 @@ export default function App() {
         }
       };
       img.src = thumbnailSrc;
+    });
+  };
+
+  const generateSideThumbnail = (slideLabel: string, slideSrc: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const items = allDesignItems[slideLabel] ?? [];
+      const printArea = selectedProduct.printAreas[slideLabel];
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onerror = () => resolve(slideSrc);
+      img.onload = () => {
+        const imgW = img.naturalWidth;
+        const imgH = img.naturalHeight;
+        const OUTPUT = Math.max(editorSize.width || 390, 390);
+        const canvas = document.createElement("canvas");
+        canvas.width = OUTPUT; canvas.height = OUTPUT;
+        const ctx = canvas.getContext("2d")!;
+        const canvasRect = getContainRect(OUTPUT, OUTPUT, imgW, imgH);
+        ctx.drawImage(img, canvasRect.left, canvasRect.top, canvasRect.width, canvasRect.height);
+        if (items.length === 0 || !printArea) { resolve(canvas.toDataURL("image/png")); return; }
+        const editorRect = getContainRect(editorSize.width, editorSize.height - EDITOR_BOTTOM_OFFSET, imageNaturalSize.width || imgW, imageNaturalSize.height || imgH);
+        const scale = canvasRect.width / editorRect.width;
+        const paLeft = canvasRect.left + canvasRect.width * printArea.x;
+        const paTop = canvasRect.top + canvasRect.height * printArea.y;
+        const paW = Math.round(canvasRect.width * printArea.w);
+        const paH = Math.round(canvasRect.height * printArea.h);
+        const imageItems = items.filter(i => i.type === "image" && i.src);
+        const loadedImgs = new Map<string, HTMLImageElement>();
+        let pending = imageItems.length;
+        const drawItems = () => {
+          const paCanvas = document.createElement("canvas");
+          paCanvas.width = paW; paCanvas.height = paH;
+          const pctx = paCanvas.getContext("2d")!;
+          for (const item of items) {
+            if (item.type === "image" && item.src) {
+              const el = loadedImgs.get(item.src);
+              if (!el) continue;
+              const aspect = el.naturalWidth / el.naturalHeight;
+              const boxSize = item.w * scale;
+              const drawW = aspect >= 1 ? boxSize : boxSize * aspect;
+              const drawH = aspect >= 1 ? boxSize / aspect : boxSize;
+              pctx.drawImage(el, item.x * scale - drawW / 2, item.y * scale - drawH / 2, drawW, drawH);
+            } else if (item.type === "text") {
+              pctx.save();
+              const fontSize = item.fontSize * scale;
+              pctx.font = `400 ${fontSize}px "CarterOne", cursive`;
+              pctx.fillStyle = item.color ?? "#3F920C";
+              pctx.textAlign = "center";
+              pctx.textBaseline = "alphabetic";
+              const lines = item.content.split("\n");
+              const lineH = fontSize * 0.9;
+              const m0 = pctx.measureText(lines[0] || "M");
+              const ascent = m0.actualBoundingBoxAscent;
+              const topY = item.y * scale - (((lines.length - 1) * lineH + ascent + m0.actualBoundingBoxDescent)) / 2;
+              lines.forEach((line, li) => pctx.fillText(line, item.x * scale, topY + ascent + li * lineH));
+              pctx.restore();
+            }
+          }
+          ctx.drawImage(paCanvas, paLeft, paTop);
+          resolve(canvas.toDataURL("image/png"));
+        };
+        if (pending === 0) { drawItems(); } else {
+          imageItems.forEach(item => {
+            const el = new Image(); el.crossOrigin = "anonymous";
+            el.onload = () => { loadedImgs.set(item.src!, el); if (--pending === 0) drawItems(); };
+            el.onerror = () => { if (--pending === 0) drawItems(); };
+            el.src = item.src!;
+          });
+        }
+      };
+      img.src = slideSrc;
     });
   };
 
@@ -1336,7 +1423,15 @@ export default function App() {
                       }}
                       onTouchStart={(e) => {
                         e.stopPropagation();
+                        pushHistory();
                         setSelectedDesignId(item.id);
+                        setDesignItems(prev => {
+                          const idx = prev.findIndex(d => d.id === item.id);
+                          if (idx === -1 || idx === prev.length - 1) return prev;
+                          const next = [...prev];
+                          next.push(next.splice(idx, 1)[0]);
+                          return next;
+                        });
                         const touch = e.touches[0];
                         designGestureRef.current = {
                           type: "move",
@@ -1384,6 +1479,7 @@ export default function App() {
                           }}
                           onTouchEnd={(e) => {
                             e.stopPropagation();
+                            pushHistory();
                             setDesignItems(prev => prev.filter(d => d.id !== item.id));
                             setSelectedDesignId(null);
                           }}
@@ -1419,6 +1515,7 @@ export default function App() {
                           }}
                             onTouchStart={(e) => {
                               e.stopPropagation();
+                              pushHistory();
                               const m = itemSizeRefs.current.get(item.id);
                               const startW = m?.w ?? item.w;
                               const startH = m?.h ?? (item.type === "image" ? item.w : item.fontSize * 1.5);
@@ -1503,12 +1600,8 @@ export default function App() {
 
         {/* Editor toolbar */}
         <div style={{ position: "absolute", top: 12, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", zIndex: 10, opacity: checkoutDrawerExpanded ? 0 : 1, pointerEvents: checkoutDrawerExpanded ? "none" : "auto", transition: "opacity 0.25s ease" }}>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button type="button" style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-              <img src="/icons/icon-arrow-return-back.svg" alt="Undo" style={{ width: 20, height: 20 }} />
-            </button>
-          </div>
-          <button type="button" onClick={() => setSlidePopoverOpen(v => !v)} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
+          <div style={{ display: "flex", gap: 4 }} />
+          <button type="button" onClick={async () => { setSlidePopoverOpen(v => !v); const results = await Promise.all(slides.map(s => generateSideThumbnail(s.label, s.src))); setSideThumbnails(slides.map((s, i) => ({ label: s.label, src: s.src, thumbnail: results[i] }))); }} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
             <span>{slides[activeIndex]?.label ?? "Front"}</span>
             <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
@@ -1526,12 +1619,29 @@ export default function App() {
       <div style={{
         position: "absolute", bottom: 0, left: 0, right: 0,
         padding: "12px 16px 28px",
-        display: "flex", justifyContent: "center",
+        display: "flex", justifyContent: "space-between",
         opacity: selectedDesignId ? 1 : 0,
         pointerEvents: selectedDesignId ? "auto" : "none",
         transition: "opacity 0.18s ease",
         zIndex: 3,
       }}>
+        <button
+          type="button"
+          onTouchStart={(e) => { e.stopPropagation(); }}
+          onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); undo(); }}
+          onClick={undo}
+          style={{
+            height: 52, borderRadius: 999, padding: "0 20px",
+            border: "none", background: "#fff",
+            boxShadow: "0 1px 6px rgba(0,0,0,0.08)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            gap: 8, fontSize: 15, fontWeight: 600, color: "#111", cursor: "pointer",
+            fontFamily: '"Inter Variable", sans-serif',
+          }}
+        >
+          <img src="/icons/icon-arrow-return-back.svg" alt="Undo" style={{ width: 18, height: 18 }} />
+          Undo
+        </button>
         <button
           ref={doneBtnRef}
           type="button"
@@ -1540,7 +1650,7 @@ export default function App() {
           style={{
             width: "50%", height: 52, borderRadius: 999,
             border: "none", background: "#fff",
-            boxShadow: "0 2px 12px rgba(0,0,0,0.12)",
+            boxShadow: "0 1px 6px rgba(0,0,0,0.08)",
             display: "flex", alignItems: "center", justifyContent: "center",
             gap: 8, fontSize: 16, fontWeight: 700, color: "#111", cursor: "pointer",
             fontFamily: '"Inter Variable", sans-serif',
@@ -1644,7 +1754,7 @@ export default function App() {
                 setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
                 if (!next && checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0;
               }}
-              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#fff", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 16 }}
+              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#EBEBEB", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 16 }}
             >
               <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <span style={{ position: "absolute", display: "flex", alignItems: "center", justifyContent: "center", transition: "opacity 0.2s, transform 0.2s", opacity: checkoutDrawerExpanded ? 0 : 1, transform: checkoutDrawerExpanded ? "scale(0.6)" : "scale(1)" }}>
@@ -1678,12 +1788,15 @@ export default function App() {
             paddingBottom: checkoutDrawerExpanded ? 36 : 0,
           }}
         >
-          {/* Price */}
+          {/* Price + color label */}
           {(() => {
             const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
             return (
-              <div style={{ opacity: interp, overflow: "hidden", maxHeight: `${interp * 60}px`, transition: "opacity 0.3s ease, max-height 0.3s ease" }}>
+              <div style={{ opacity: interp, overflow: "hidden", maxHeight: `${interp * 80}px`, transition: "opacity 0.3s ease, max-height 0.3s ease" }}>
                 <div style={{ paddingLeft: 20, marginTop: 0, marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#6a6a6a", textTransform: "uppercase", marginBottom: 10 }}>
+                    COLOR: {selectedProduct.colors.find(c => c.key === selectedColor)?.label.toUpperCase()}
+                  </div>
                   <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginBottom: 2 }}>
                     {currentPrice.toFixed(2).replace(".", ",") + " €"}
                   </div>
@@ -1721,14 +1834,6 @@ export default function App() {
             ))}
           </div>
           ); })()}
-          {(() => {
-            const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
-            return (
-              <div style={{ opacity: interp, overflow: "hidden", maxHeight: `${interp * 28}px`, transition: "opacity 0.3s ease, max-height 0.3s ease", fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#6a6a6a", textTransform: "uppercase", paddingLeft: 20, marginBottom: 6 }}>
-                COLOR: {selectedProduct.colors.find(c => c.key === selectedColor)?.label.toUpperCase()}
-              </div>
-            );
-          })()}
 
           {/* Available sizes + CTA buttons — fade in as ck-drawer expands */}
           {(() => {
@@ -1742,11 +1847,11 @@ export default function App() {
                     <button
                       type="button"
                       onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }}
-                      style={{ width: "100%", height: 54, borderRadius: 0, border: "1px solid #d0d0d0", background: "#fff", color: "#111", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", marginTop: 10, opacity: interp }}
+                      style={{ width: "100%", height: 54, borderRadius: 0, border: "2px solid #111", background: "none", color: "#111", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: interp }}
                     >
                       <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ filter: "brightness(0)" }} />
                       <span style={{ flex: 1, textAlign: "left" }}>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
-                      <img src="/icons/icon-chevron-down.svg" width={18} height={18} alt="" style={{ filter: "brightness(0)", opacity: 0.4 }} />
+                      <img src="/icons/icon-chevron-down.svg" width={18} height={18} alt="" style={{ filter: "brightness(0)" }} />
                     </button>
                   )}
                   <button
@@ -1872,15 +1977,26 @@ export default function App() {
                   <div style={{ height: 1, background: `rgba(199,199,199,${interp})`, margin: "24px 0", transition: "background 0.3s ease" }} />
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#6a6a6a", textTransform: "uppercase", padding: "0 20px", marginBottom: 10 }}>Other products</div>
-                    <div onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} style={{ overflowX: "auto", display: "flex", gap: 8, padding: "0 20px 4px", scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x" }}>
+                    <div style={{ position: "relative" }}>
+                      {!otherProductsScrollPos.atStart && (
+                        <button type="button" onClick={() => otherProductsScrollRef.current?.scrollBy({ left: -200, behavior: "smooth" })} style={{ position: "absolute", left: 12, top: 75, transform: "translateY(-50%)", zIndex: 5, width: 32, height: 32, borderRadius: "50%", border: "none", background: "rgba(255,255,255,1)", boxShadow: "0 2px 20px rgba(0,0,0,0.15)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: 1 }}>
+                          <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" style={{ transform: "rotate(90deg)", filter: "brightness(0)" }} />
+                        </button>
+                      )}
+                      {!otherProductsScrollPos.atEnd && (
+                        <button type="button" onClick={() => otherProductsScrollRef.current?.scrollBy({ left: 200, behavior: "smooth" })} style={{ position: "absolute", right: 12, top: 75, transform: "translateY(-50%)", zIndex: 5, width: 32, height: 32, borderRadius: "50%", border: "none", background: "rgba(255,255,255,1)", boxShadow: "0 2px 20px rgba(0,0,0,0.15)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: 1 }}>
+                          <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" style={{ transform: "rotate(-90deg)", filter: "brightness(0)" }} />
+                        </button>
+                      )}
+                    <div ref={otherProductsScrollRef} onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} onScroll={e => { const el = e.currentTarget; setOtherProductsScrollPos({ atStart: el.scrollLeft <= 0, atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 }); }} style={{ overflowX: "auto", display: "flex", gap: 8, padding: "0 20px 4px", scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x" }}>
                       {[
+                        { productId: null, name: "Women Cropped Tank",         thumbnail: `/img/product-images/women-cropped-tank/women-cropped-tank-black.webp` },
                         { productId: "unisex-hoodie",           name: "Unisex Hoodie",                    thumbnail: PRODUCT_CONFIGS["unisex-hoodie"].thumbnail(PRODUCT_CONFIGS["unisex-hoodie"].defaultColor) },
-                        { productId: null, name: "Organic Tote Bag",           thumbnail: `/img/product-images/organic-tote-bag/organic-tote-bag-beige.webp` },
                         { productId: null, name: "Relaxed Vintage Cap",        thumbnail: `/img/product-images/relaxed-vintage-cap/relaxed-vintage cap-green.webp` },
                         { productId: null, name: "Stripped Tennis Socks",      thumbnail: `/img/product-images/stripped-tennis-socks/stripped-tennis-socks-whitemint.webp` },
-                        { productId: null, name: "Women Boxy Organic T-shirt", thumbnail: `/img/product-images/women-boxy-organic-tshirt/women-boxy-organic-tshirt-yellow.webp` },
-                        { productId: null, name: "Women Cropped Tank",         thumbnail: `/img/product-images/women-cropped-tank/women-cropped-tank-black.webp` },
                         { productId: "oversized-unisex-tshirt", name: "Stanley/Stella Oversized T-shirt", thumbnail: PRODUCT_CONFIGS["oversized-unisex-tshirt"].thumbnail(PRODUCT_CONFIGS["oversized-unisex-tshirt"].defaultColor) },
+                        { productId: null, name: "Organic Tote Bag",           thumbnail: `/img/product-images/organic-tote-bag/organic-tote-bag-beige.webp` },
+                        { productId: null, name: "Women Boxy Organic T-shirt", thumbnail: `/img/product-images/women-boxy-organic-tshirt/women-boxy-organic-tshirt-yellow.webp` },
                       ].filter(({ productId }) => productId !== selectedProductId).map(({ productId, name, thumbnail }) => (
                         <button
                           key={name}
@@ -1894,15 +2010,26 @@ export default function App() {
                             setActiveIndex(0);
                             setTimeout(() => { if (checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTo({ top: 0, behavior: "smooth" }); }, 50);
                           }}
-                          style={{ flexShrink: 0, width: 120, background: "none", border: "none", borderRadius: 0, overflow: "visible", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0 }}
+                          style={{ flexShrink: 0, width: 130, background: "none", border: "none", borderRadius: 0, overflow: "visible", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0 }}
                         >
                           <div style={{ width: "100%", height: 150, background: "#e9e9e9", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
                             <img src={thumbnail} alt={name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
                           </div>
-                          <div style={{ paddingTop: 6, fontSize: 12, fontWeight: 500, color: "#111", lineHeight: 1.4, height: 38, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{name}</div>
+                          <div style={{ paddingTop: 8, fontSize: 12, fontWeight: 500, color: "#6a6a6a", lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{name}</div>
                         </button>
                       ))}
                     </div>
+                    </div>{/* end position relative */}
+                    <div style={{ height: 12 }} />
+                  </div>
+                  <div style={{ padding: "0 20px 0" }}>
+                    <button
+                      type="button"
+                      onClick={() => setAllProductsDrawerOpen(true)}
+                      style={{ width: "100%", height: 54, borderRadius: 0, border: "2px solid #111", background: "none", color: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+                    >
+                      See all products
+                    </button>
                   </div>
                 </div>
 
@@ -1926,6 +2053,22 @@ export default function App() {
         }} />
       </div>
 
+      {/* Gradient blur above action bar — visible when drawer at max */}
+      <div style={{
+        position: "fixed",
+        bottom: checkoutDrawerHeight,
+        left: 0, right: 0,
+        height: 80,
+        zIndex: 19,
+        backdropFilter: "blur(25px)",
+        WebkitBackdropFilter: "blur(25px)",
+        maskImage: "linear-gradient(to bottom, transparent, black)",
+        WebkitMaskImage: "linear-gradient(to bottom, transparent, black)",
+        opacity: checkoutDrawerExpanded ? 1 : 0,
+        pointerEvents: "none",
+        transition: checkoutDrawerDragging ? "none" : "opacity 0.7s cubic-bezier(0.16,1,0.3,1), bottom 0.7s cubic-bezier(0.16,1,0.3,1)",
+      }} />
+
       {/* Bottom action bar */}
       <div id="action-bar" style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId || (showPopup && !hasAnyItems) ? 0 : 1, pointerEvents: selectedDesignId || (showPopup && !hasAnyItems) ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
 
@@ -1941,21 +2084,35 @@ export default function App() {
         </div> */}
 
         {/* Action bar buttons */}
-        <div style={{
-          display: "flex", gap: 8, alignItems: "center", justifyContent: "center", padding: "0 16px",
-          opacity: checkoutDrawerExpanded ? 0 : 1,
-          pointerEvents: checkoutDrawerExpanded ? "none" : "auto",
-          transition: "opacity 0.25s ease",
-        }}>
-          <button
-            type="button"
-            className="action-bar-btn"
-            onClick={() => setDesignDrawerOpen(true)}
-            style={{ height: 46, padding: "0 18px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
-          >
-            <img src="/icons/icon-plus.svg" width={20} height={20} alt="" style={{ filter: "brightness(0) invert(1) brightness(0.416)" }} />
-            <span>Add design/text</span>
-          </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", padding: "0 16px" }}>
+          <div style={{ padding: 1, borderRadius: 999, background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)" }}>
+            <button
+              type="button"
+              className="action-bar-btn"
+              onClick={() => {
+                if (checkoutDrawerExpanded) {
+                  setCheckoutDrawerExpanded(false);
+                  setCheckoutDrawerHeight(DRAWER_MIN);
+                  setTimeout(() => setDesignDrawerOpen(true), 500);
+                } else {
+                  setDesignDrawerOpen(true);
+                }
+              }}
+              style={{ height: checkoutDrawerExpanded ? 38 : 46, padding: checkoutDrawerExpanded ? "0 14px" : "0 18px", borderRadius: 999, border: "none", background: "rgba(244,244,244,0.95)", color: "#111", display: "flex", alignItems: "center", gap: checkoutDrawerExpanded ? 6 : 8, fontSize: checkoutDrawerExpanded ? 13 : 14, fontWeight: 600, cursor: "pointer", transition: "height 0.25s ease, font-size 0.25s ease" }}
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="plusGradient" x1="0" y1="10" x2="20" y2="10" gradientUnits="userSpaceOnUse">
+                    <stop offset="-0.88%" stopColor="#DC2626" />
+                    <stop offset="49.94%" stopColor="#4D52D2" />
+                    <stop offset="101.36%" stopColor="#16A34A" />
+                  </linearGradient>
+                </defs>
+                <path d="M10 4v12M4 10h12" stroke="url(#plusGradient)" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <span>Add design/text</span>
+            </button>
+          </div>
         </div>
 
       </div>
@@ -2404,20 +2561,24 @@ export default function App() {
               <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setSlidePopoverOpen(false)} />
             </div>
             <div style={{ width: "100%", height: 1, background: "#e8e8e8" }} />
-            <div style={{ paddingBottom: 32 }}>
-              {slides.map((slide: { label: string; src: string }, i: number) => (
-                <div key={slide.label}>
+            <div style={{ padding: "16px 16px 32px", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+              {slides.map((slide: { label: string; src: string }, i: number) => {
+                const thumb = sideThumbnails.find(t => t.label === slide.label);
+                const isActive = i === index;
+                return (
                   <button
+                    key={slide.label}
                     type="button"
                     onClick={() => { goToSlide(i); setSlidePopoverOpen(false); }}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "0 20px", height: 52, border: "none", background: "none", fontSize: 15, fontWeight: i === index ? 600 : 400, color: "#111", cursor: "pointer" }}
+                    style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, border: "none", background: "none", padding: 0, cursor: "pointer" }}
                   >
-                    <span>{slide.label}</span>
-                    {i === index && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#111", flexShrink: 0 }} />}
+                    <div style={{ background: "#e9e9e9", aspectRatio: "1/1", width: "100%", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, outline: isActive ? "2px solid #111" : "none" }}>
+                      <img src={thumb?.thumbnail ?? slide.src} alt={slide.label} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 8, boxSizing: "border-box", borderRadius: 16 }} />
+                    </div>
+                    <span style={{ fontSize: 14, fontWeight: isActive ? 700 : 500, color: "#111", textAlign: "center", width: "100%" }}>{slide.label}</span>
                   </button>
-                  {i < slides.length - 1 && <div style={{ height: 1, background: "#f0f0f0", margin: "0 20px" }} />}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Drawer.Content>
         </Drawer.Portal>
@@ -2458,12 +2619,16 @@ export default function App() {
                       setIndex(0);
                       setActiveIndex(0);
                       setAllProductsDrawerOpen(false);
+                      setCheckoutDrawerExpanded(true);
+                      setCheckoutDrawerHeight(checkoutDrawerMaxH);
                       if (showPopup) dismissPopup();
                     }}
-                    style={{ background: selectedProductId === productId ? "#f0f0f0" : "#f7f7f7", border: selectedProductId === productId ? "2px solid #111" : "1px solid #e8e8e8", borderRadius: 12, overflow: "hidden", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0 }}
+                    style={{ background: "none", border: "none", borderRadius: 0, overflow: "hidden", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0, width: "100%" }}
                   >
-                    <img src={thumbnail} alt={name} style={{ width: "100%", aspectRatio: "1/1", objectFit: "cover", display: "block" }} />
-                    <div style={{ padding: "8px 10px 10px", fontSize: 12, fontWeight: 500, color: "#111", lineHeight: 1.4 }}>{name}</div>
+                    <div style={{ width: "100%", aspectRatio: "3/4", background: "#e9e9e9", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: selectedProductId === productId ? "inset 0 0 0 2px #111" : "none" }}>
+                      <img src={thumbnail} alt={name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+                    </div>
+                    <div style={{ paddingTop: 6, fontSize: 12, fontWeight: 500, color: "#6a6a6a", lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{name}</div>
                   </button>
                 ))}
               </div>
