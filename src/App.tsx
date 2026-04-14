@@ -1796,6 +1796,22 @@ export default function App() {
           pointerEvents: selectedDesignId || (showPopup && !hasAnyItems) ? "none" : "auto",
         }}
       >
+        {/* Tap-to-expand overlay — only active when drawer is at MIN */}
+        {!checkoutDrawerExpanded && (
+          <div
+            style={{ position: "absolute", inset: 0, zIndex: 10, cursor: "pointer" }}
+            onTouchStart={e => { checkoutDrawerStart(e.touches[0].clientY); }}
+            onTouchMove={e => { e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
+            onTouchEnd={e => {
+              checkoutDrawerEnd(e.changedTouches[0].clientY);
+            }}
+            onClick={() => {
+              setCheckoutDrawerExpanded(true);
+              setCheckoutDrawerHeight(checkoutDrawerMaxH);
+              computeHoopframeWarning();
+            }}
+          />
+        )}
         {/* Drag handle */}
         <div
           onMouseDown={onCheckoutDrawerHandleMouseDown}
@@ -1814,7 +1830,7 @@ export default function App() {
           onTouchStart={e => { checkoutDrawerStart(e.touches[0].clientY); }}
           onTouchMove={e => { e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
           onTouchEnd={e => { checkoutDrawerEnd(e.changedTouches[0].clientY); }}
-          style={{ display: "flex", alignItems: "center", padding: checkoutDrawerExpanded ? "0 20px 12px" : "0 20px", gap: 0, flexShrink: 0, touchAction: "none", boxShadow: checkoutDrawerExpanded && checkoutDrawerContentScrolled ? "0 2px 6px rgba(0,0,0,0.06)" : "none", transition: "box-shadow 0.3s ease, padding 0.3s ease" }}>
+          style={{ display: "flex", alignItems: "center", padding: checkoutDrawerExpanded ? "0 20px 12px" : "0 16px", gap: 0, flexShrink: 0, touchAction: "none", boxShadow: checkoutDrawerExpanded && checkoutDrawerContentScrolled ? "0 2px 6px rgba(0,0,0,0.06)" : "none", transition: "box-shadow 0.3s ease, padding 0.3s ease" }}>
             <div style={{
               display: "flex", alignItems: "center", gap: 8, overflow: "hidden", flexShrink: 0,
               maxWidth: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 200}px`,
@@ -1822,18 +1838,22 @@ export default function App() {
               opacity: 1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))),
               transition: "max-width 0.3s ease, margin-right 0.3s ease, opacity 0.3s ease",
             }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: "#000", flexShrink: 0, opacity: 0.7 }}>{currentPrice.toFixed(2).replace(".", ",") + " €"}</span>
-              <span style={{ fontSize: 20, color: "#000", flexShrink: 0, opacity: 0.4, lineHeight: 1 }}>·</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", flexShrink: 0, background: "#111", borderRadius: 9999, padding: "6px 10px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <img src="/icons/icon-cart.svg" alt="" style={{ width: 18, height: 18, filter: "invert(1)" }} />
+                {currentPrice.toFixed(2).replace(".", ",") + " €"}
+              </span>
             </div>
             <h2 style={{
               margin: 0,
               fontFamily: "MADEOuterSans, sans-serif",
               fontSize: 14, lineHeight: 1.4, fontWeight: 500, letterSpacing: "-0.02em", color: "#000",
               opacity: 0.4 + Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))) * 0.4,
-              flex: 1, overflow: "hidden",
+              flex: 1, overflow: "hidden", marginLeft: checkoutDrawerExpanded ? 0 : 4,
               whiteSpace: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "nowrap" : "normal",
-              textOverflow: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "ellipsis" : "clip",
+              textOverflow: "clip",
               maxHeight: `${19.6 + Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))) * 19.6}px`,
+              WebkitMaskImage: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "linear-gradient(to right, black 80%, transparent 100%)" : "none",
+              maskImage: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "linear-gradient(to right, black 80%, transparent 100%)" : "none",
             }}>
               {selectedProduct.name}
             </h2>
@@ -1846,11 +1866,11 @@ export default function App() {
                 if (next) computeHoopframeWarning();
                 if (!next && checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0;
               }}
-              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#EBEBEB", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 16 }}
+              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#E3E3E3", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 16 }}
             >
               <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <span style={{ position: "absolute", display: "flex", alignItems: "center", justifyContent: "center", transition: "opacity 0.2s, transform 0.2s", opacity: checkoutDrawerExpanded ? 0 : 1, transform: checkoutDrawerExpanded ? "scale(0.6)" : "scale(1)" }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15" /></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 11 12 6 7 11" /><polyline points="17 18 12 13 7 18" /></svg>
                 </span>
                 <span style={{ display: "flex", alignItems: "center", justifyContent: "center", transition: "opacity 0.2s, transform 0.2s", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "scale(1)" : "scale(0.6)" }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
@@ -1898,7 +1918,7 @@ export default function App() {
             );
           })()}
           {(() => { const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))); return (
-          <div onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} style={{ display: "flex", overflowX: "auto", gap: 4, padding: "0 20px", marginBottom: 14, marginTop: `${8 - interp * 8}px`, scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x", transition: checkoutDrawerDragging ? "none" : "margin-top 0.3s ease" }}>
+          <div onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} style={{ display: "flex", overflowX: "auto", gap: 4, padding: "0 16px", marginBottom: 14, marginTop: `${8 - interp * 8}px`, scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x", transition: checkoutDrawerDragging ? "none" : "margin-top 0.3s ease" }}>
             {selectedProduct.colors.map(({ key, label }) => (
                 <button
                   key={key}
@@ -1934,7 +1954,7 @@ export default function App() {
             return (
               <div>
                 {/* Buttons */}
-                <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ padding: `0 ${Math.round(16 + interp * 4)}px`, display: "flex", flexDirection: "column", gap: 8 }}>
                   {hasAnyItems && (
                     <div style={{ display: "flex", flexDirection: "column" }}>
                     <span style={{ display: "inline-block", alignSelf: "flex-start", background: "#111", color: "#fff", fontSize: 12, fontWeight: 500, padding: "3px 8px", fontFamily: '"Inter Variable", sans-serif', opacity: interp }}>Print technique</span>
@@ -1974,7 +1994,7 @@ export default function App() {
                 <div style={{ opacity: interp }}>
 
                 {/* Shipping info */}
-                <div style={{ border: `1px solid rgba(199,199,199,${interp})`, borderRadius: 0, overflow: "hidden", margin: "16px 20px 0", transition: "border-color 0.3s ease" }}>
+                <div style={{ border: `1px solid rgba(199,199,199,${interp})`, borderRadius: 0, overflow: "hidden", margin: `16px ${Math.round(16 + interp * 4)}px 0`, transition: "border-color 0.3s ease" }}>
                   <div style={{ padding: "16px", display: "flex", alignItems: "flex-start", gap: 12 }}>
                     <img src="/icons/icon-truck.svg" alt="" style={{ width: 24, height: 24, flexShrink: 0, marginTop: 2 }} />
                     <div style={{ flex: 1 }}>
@@ -2577,7 +2597,7 @@ export default function App() {
                               </div>
                               <span style={{ color: "#C2410C", fontWeight: 600 }}>Attention</span>
                             </div>
-                            <span style={{ color: "#111" }}>We have to stitch your design smaller. This is the maximum size allowed.</span>
+                            <span style={{ color: "#111" }}>We have to stitch your design smaller. This is the maximum size allowed. Adjust your design if you are not happy with the result.</span>
                           </div>
                         )}
                       </div>
