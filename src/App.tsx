@@ -240,7 +240,7 @@ export default function App() {
   const previewImgPan = useRef({ x: 0, y: 0 });
   const [previewImgTransform, setPreviewImgTransform] = useState({ zoom: 1, x: 0, y: 0 });
   const previewImgGesture = useRef<{ type: "pinch" | "pan"; startDist: number; startZoom: number; startPanX: number; startPanY: number; startTx: number; startTy: number } | null>(null);
-  const previewImgLastTap = useRef(0);
+
   const previewImgContainerRef = useRef<HTMLDivElement>(null);
   const popupImgRef = useRef<HTMLDivElement>(null);
   const [popupZoom, setPopupZoom] = useState(1);
@@ -251,6 +251,7 @@ export default function App() {
   const [embroideryDataUrl, setEmbroideryDataUrl] = useState<string | null>(null);
   const [embroideryRenderedUrl, setEmbroideryRenderedUrl] = useState<string | null>(null);
   const [designBbox, setDesignBbox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [hoopframeWarning, setHoopframeWarning] = useState(false);
 
   type DesignItem = { id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number; color?: string; };
   const [allDesignItems, setAllDesignItems] = useState<Record<string, DesignItem[]>>(() => {
@@ -302,6 +303,7 @@ export default function App() {
     setTimeout(() => setAnimating(false), 750);
     setCheckoutDrawerExpanded(true);
     setCheckoutDrawerHeight(checkoutDrawerMaxH);
+    computeHoopframeWarning();
     requestAnimationFrame(() => requestAnimationFrame(() => setRevealed(true)));
   };
 
@@ -386,6 +388,7 @@ export default function App() {
     const next = dy > THRESHOLD ? true : dy < -THRESHOLD ? false : checkoutDrawerHeight > midpoint;
     setCheckoutDrawerExpanded(next);
     setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
+    if (next) computeHoopframeWarning();
     if (!next && checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0;
     setCheckoutDrawerDragging(false);
     checkoutDrawerDragDirection.current = "none";
@@ -665,6 +668,15 @@ export default function App() {
 
   useEffect(() => { currentPARef.current = currentPA; }, [currentPA]);
 
+  const computeHoopframeWarning = () => {
+    if (savedPrintTechnique !== "embroidery" || designItems.length === 0) { setHoopframeWarning(false); return; }
+    flattenDesignItems().then(({ bbox }) => {
+      if (!bbox) { setHoopframeWarning(false); return; }
+      const area = bbox.width * bbox.height;
+      setHoopframeWarning(area > 1 / 7 && Math.sqrt((1 / 7) / area) < 0.8);
+    });
+  };
+
   // Reset preview image zoom/pan when drawer closes
   useEffect(() => {
     if (!previewDrawerOpen) {
@@ -901,6 +913,19 @@ export default function App() {
     localStorage.setItem("designItems", JSON.stringify(allDesignItems));
   }, [allDesignItems]);
 
+  // Clamp design bbox to max 1/7 of print area (by area), anchored to center. Embroidery only.
+  const clampEmbroideryBbox = (bbox: { left: number; top: number; width: number; height: number }) => {
+    const maxAreaFraction = 1 / 7;
+    const area = bbox.width * bbox.height;
+    if (area <= maxAreaFraction) return bbox;
+    const scale = Math.sqrt(maxAreaFraction / area);
+    const cx = bbox.left + bbox.width / 2;
+    const cy = bbox.top + bbox.height / 2;
+    const newW = bbox.width * scale;
+    const newH = bbox.height * scale;
+    return { left: cx - newW / 2, top: cy - newH / 2, width: newW, height: newH };
+  };
+
   const generateCartThumbnail = (): Promise<string> => {
     return new Promise((resolve) => {
       const frontItems = allDesignItems["Front"] ?? [];
@@ -974,11 +999,46 @@ export default function App() {
             }
           }
 
-          // If embroidery, run the renderer on the PA canvas
+          // If embroidery, clamp design to 1/7 of PA area (anchored to center) then render
           let designCanvas: HTMLCanvasElement = paCanvas;
           if (savedPrintTechnique === "embroidery") {
-            const imageData = pctx.getImageData(0, 0, paW, paH);
-            designCanvas = renderEmbroidery(imageData, paW, paH);
+            // Compute design bbox in PA-local fraction coords
+            const allAlpha = pctx.getImageData(0, 0, paW, paH).data;
+            let minX = paW, maxX = 0, minY = paH, maxY = 0, hasPixel = false;
+            for (let y = 0; y < paH; y++) for (let x = 0; x < paW; x++) {
+              if (allAlpha[(y * paW + x) * 4 + 3] > 20) {
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+                hasPixel = true;
+              }
+            }
+            if (hasPixel) {
+              const rawBbox = { left: minX / paW, top: minY / paH, width: (maxX - minX) / paW, height: (maxY - minY) / paH };
+              const clamped = clampEmbroideryBbox(rawBbox);
+              const scaleX = clamped.width / rawBbox.width;
+              const scaleY = clamped.height / rawBbox.height;
+              const s = Math.min(scaleX, scaleY);
+              if (s < 1) {
+                const clampedCanvas = document.createElement("canvas");
+                clampedCanvas.width = paW; clampedCanvas.height = paH;
+                const cctx = clampedCanvas.getContext("2d")!;
+                const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+                cctx.save();
+                cctx.translate(cx, cy);
+                cctx.scale(s, s);
+                cctx.translate(-cx, -cy);
+                cctx.drawImage(paCanvas, 0, 0);
+                cctx.restore();
+                const imageData = cctx.getImageData(0, 0, paW, paH);
+                designCanvas = renderEmbroidery(imageData, paW, paH);
+              } else {
+                const imageData = pctx.getImageData(0, 0, paW, paH);
+                designCanvas = renderEmbroidery(imageData, paW, paH);
+              }
+            } else {
+              const imageData = pctx.getImageData(0, 0, paW, paH);
+              designCanvas = renderEmbroidery(imageData, paW, paH);
+            }
           }
 
           ctx.drawImage(designCanvas, paLeft, paTop);
@@ -1783,6 +1843,7 @@ export default function App() {
                 const next = !checkoutDrawerExpanded;
                 setCheckoutDrawerExpanded(next);
                 setCheckoutDrawerHeight(next ? checkoutDrawerMaxH : DRAWER_MIN);
+                if (next) computeHoopframeWarning();
                 if (!next && checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0;
               }}
               style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#EBEBEB", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 16 }}
@@ -1875,15 +1936,26 @@ export default function App() {
                 {/* Buttons */}
                 <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 8 }}>
                   {hasAnyItems && (
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                    <span style={{ display: "inline-block", alignSelf: "flex-start", background: "#111", color: "#fff", fontSize: 12, fontWeight: 500, padding: "3px 8px", fontFamily: '"Inter Variable", sans-serif', opacity: interp }}>Print technique</span>
                     <button
                       type="button"
-                      onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }}
+                      onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); const warn = savedPrintTechnique === "embroidery" && bbox ? (() => { const area = bbox.width * bbox.height; if (area <= 1/7) return false; return Math.sqrt((1/7) / area) < 0.8; })() : false; setHoopframeWarning(warn); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }}
                       style={{ width: "100%", height: 54, borderRadius: 0, border: "2px solid #111", background: "none", color: "#111", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: interp }}
                     >
                       <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ filter: "brightness(0)" }} />
                       <span style={{ flex: 1, textAlign: "left" }}>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
+                      {hoopframeWarning && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                          <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#EA580C", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", lineHeight: 1 }}>!</span>
+                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 500, color: "#C2410C" }}>Attention</span>
+                        </div>
+                      )}
                       <img src="/icons/icon-chevron-down.svg" width={18} height={18} alt="" style={{ filter: "brightness(0)" }} />
                     </button>
+                    </div>
                   )}
                   <button
                     type="button"
@@ -1891,7 +1963,7 @@ export default function App() {
                     style={{ width: "100%", height: 54, borderRadius: 0, border: "none", background: "#000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, fontSize: 14, fontWeight: 600, cursor: "pointer", marginBottom: 10 }}
                   >
                     <img src="/icons/icon-cart.svg" alt="" style={{ width: 20, height: 20, filter: "invert(1)" }} />
-                    <span>Select sizes</span>
+                    <span>Select size</span>
                   </button>
                   {oos.length > 0 && (
                     <div style={{ fontSize: 15, color: "#6a6a6a", opacity: interp }}>
@@ -2418,17 +2490,25 @@ export default function App() {
                   {(() => {
                     const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
                     const pa = selectedProduct.printAreas["Front"];
-                    const leftPct   = (pa.x + (designBbox ? designBbox.left  * pa.w : 0)) * 100;
-                    const topPct    = (pa.y + (designBbox ? designBbox.top   * pa.h : 0)) * 100;
-                    const widthPct  = (designBbox ? designBbox.width  * pa.w : pa.w) * 100;
-                    const heightPct = (designBbox ? designBbox.height * pa.h : pa.h) * 100;
+                    const effectiveBbox = designBbox && printTechnique === "embroidery" ? clampEmbroideryBbox(designBbox) : designBbox;
+                    const needsSizeWarning = (() => {
+                      if (!designBbox || printTechnique !== "embroidery") return false;
+                      const origArea = designBbox.width * designBbox.height;
+                      const clampedArea = effectiveBbox ? effectiveBbox.width * effectiveBbox.height : origArea;
+                      const s = Math.sqrt(clampedArea / origArea);
+                      return s < 0.8;
+                    })();
+                    const leftPct   = (pa.x + (effectiveBbox ? effectiveBbox.left  * pa.w : 0)) * 100;
+                    const topPct    = (pa.y + (effectiveBbox ? effectiveBbox.top   * pa.h : 0)) * 100;
+                    const widthPct  = (effectiveBbox ? effectiveBbox.width  * pa.w : pa.w) * 100;
+                    const heightPct = (effectiveBbox ? effectiveBbox.height * pa.h : pa.h) * 100;
                     return (
                       <div
                         ref={previewImgContainerRef}
                         style={{ position: "relative", overflow: "hidden", width: "100%", height: 600, flexShrink: 0, borderRadius: 0, background: "#f4f4f4", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "pan-y" }}
                         onTouchStart={(e) => {
-                          e.stopPropagation();
                           if (e.touches.length === 2) {
+                            e.stopPropagation();
                             const dx = e.touches[1].clientX - e.touches[0].clientX;
                             const dy = e.touches[1].clientY - e.touches[0].clientY;
                             previewImgGesture.current = {
@@ -2438,26 +2518,6 @@ export default function App() {
                               startPanX: previewImgPan.current.x,
                               startPanY: previewImgPan.current.y,
                               startTx: 0, startTy: 0,
-                            };
-                          } else if (e.touches.length === 1) {
-                            const now = Date.now();
-                            if (now - previewImgLastTap.current < 300) {
-                              previewImgZoom.current = 1;
-                              previewImgPan.current = { x: 0, y: 0 };
-                              setPreviewImgTransform({ zoom: 1, x: 0, y: 0 });
-                              previewImgGesture.current = null;
-                              previewImgLastTap.current = 0;
-                              return;
-                            }
-                            previewImgLastTap.current = now;
-                            previewImgGesture.current = {
-                              type: "pan",
-                              startDist: 0,
-                              startZoom: previewImgZoom.current,
-                              startPanX: previewImgPan.current.x,
-                              startPanY: previewImgPan.current.y,
-                              startTx: e.touches[0].clientX,
-                              startTy: e.touches[0].clientY,
                             };
                           }
                         }}
@@ -2507,6 +2567,17 @@ export default function App() {
                         {previewUrl && (
                           <div style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, width: `${widthPct}%`, height: `${heightPct}%`, display: "flex", alignItems: "center", justifyContent: "center", transform: `translate(${previewImgTransform.x}px, ${previewImgTransform.y}px) scale(${previewImgTransform.zoom})`, transformOrigin: "center center", willChange: "transform" }}>
                             <img src={previewUrl} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
+                          </div>
+                        )}
+                        {needsSizeWarning && (
+                          <div style={{ position: "absolute", top: 10, left: 10, right: 10, pointerEvents: "none", background: "#fff", border: "1.5px solid #EA580C", fontSize: 14, fontWeight: 500, padding: "8px 12px", fontFamily: '"Inter Variable", sans-serif', display: "flex", flexDirection: "column", gap: 8 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#EA580C", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", lineHeight: 1 }}>!</span>
+                              </div>
+                              <span style={{ color: "#C2410C", fontWeight: 600 }}>Attention</span>
+                            </div>
+                            <span style={{ color: "#111" }}>We have to stitch your design smaller. This is the maximum size allowed.</span>
                           </div>
                         )}
                       </div>
@@ -2744,6 +2815,7 @@ export default function App() {
                       setAllProductsDrawerOpen(false);
                       setCheckoutDrawerExpanded(true);
                       setCheckoutDrawerHeight(checkoutDrawerMaxH);
+                      computeHoopframeWarning();
                       if (showPopup) dismissPopup();
                     }}
                     style={{ background: "none", border: "none", borderRadius: 0, overflow: "hidden", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0, width: "100%" }}
