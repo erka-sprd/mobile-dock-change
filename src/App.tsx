@@ -442,6 +442,9 @@ export default function App() {
     lastZoom: 1,
   });
 
+  const EDITOR_SWIPE_OPEN_DRAWER = 50;
+  const editorSwipeRef = useRef({ active: false, startX: 0, startY: 0 });
+
   useEffect(() => {
     const id = "dock-bounce-keyframe";
     if (!document.getElementById(id)) {
@@ -565,6 +568,7 @@ export default function App() {
   const onEditorTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     if (selectedDesignId) { setSelectedDesignId(null); return; }
     if (e.touches.length === 2) {
+      editorSwipeRef.current.active = false;
       if (zoom <= 1) setPan({ x: 0, y: 0 });
       imageGesture.current = {
         mode: "pinch",
@@ -589,12 +593,30 @@ export default function App() {
         lastPan: pan,
         lastZoom: zoom,
       };
+      return;
+    }
+    if (e.touches.length === 1 && zoom <= 1 && !checkoutDrawerExpanded) {
+      editorSwipeRef.current = {
+        active: true,
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+      };
     }
   };
 
   const onEditorTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
     if (designGestureRef.current.type !== "idle") {
       handleDesignMove(e);
+      return;
+    }
+    if (editorSwipeRef.current.active && e.touches.length === 1) {
+      const dy = e.touches[0].clientY - editorSwipeRef.current.startY;
+      const dx = e.touches[0].clientX - editorSwipeRef.current.startX;
+      if (dy < -EDITOR_SWIPE_OPEN_DRAWER && Math.abs(dy) > Math.abs(dx)) {
+        editorSwipeRef.current.active = false;
+        setCheckoutDrawerExpanded(true);
+        setCheckoutDrawerHeight(checkoutDrawerMaxH);
+      }
       return;
     }
     if (imageGesture.current.mode === "pinch") {
@@ -631,6 +653,7 @@ export default function App() {
       handleDesignEnd();
       return;
     }
+    editorSwipeRef.current.active = false;
     imageGesture.current.mode = "idle";
     if (imageGesture.current.lastZoom <= 1) {
       imageGesture.current.lastZoom = 1;
@@ -1831,18 +1854,6 @@ export default function App() {
           onTouchMove={e => { e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
           onTouchEnd={e => { checkoutDrawerEnd(e.changedTouches[0].clientY); }}
           style={{ display: "flex", alignItems: "center", padding: checkoutDrawerExpanded ? "0 20px 12px" : "0 16px", gap: 0, flexShrink: 0, touchAction: "none", boxShadow: checkoutDrawerExpanded && checkoutDrawerContentScrolled ? "0 2px 6px rgba(0,0,0,0.06)" : "none", transition: "box-shadow 0.3s ease, padding 0.3s ease" }}>
-            <div style={{
-              display: "flex", alignItems: "center", gap: 8, overflow: "hidden", flexShrink: 0,
-              maxWidth: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 200}px`,
-              marginRight: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 8}px`,
-              opacity: 1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))),
-              transition: "max-width 0.3s ease, margin-right 0.3s ease, opacity 0.3s ease",
-            }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: "#fff", flexShrink: 0, background: "#111", borderRadius: 9999, padding: "6px 10px", display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <img src="/icons/icon-cart.svg" alt="" style={{ width: 18, height: 18, filter: "invert(1)" }} />
-                {currentPrice.toFixed(2).replace(".", ",") + " €"}
-              </span>
-            </div>
             <h2 style={{
               margin: 0,
               fontFamily: "MADEOuterSans, sans-serif",
@@ -1857,6 +1868,18 @@ export default function App() {
             }}>
               {selectedProduct.name}
             </h2>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8, overflow: "hidden", flexShrink: 0,
+              maxWidth: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 200}px`,
+              marginLeft: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 8}px`,
+              opacity: 1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))),
+              transition: "max-width 0.3s ease, margin-left 0.3s ease, opacity 0.3s ease",
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: "#6A6A6A", flexShrink: 0, background: "#E3E3E3", borderRadius: 9999, padding: "6px 10px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <img src="/icons/icon-cart.svg" alt="" style={{ width: 18, height: 18, filter: "invert(42%)" }} />
+                {currentPrice.toFixed(2).replace(".", ",") + " €"}
+              </span>
+            </div>
             <button
               type="button"
               onClick={() => {
@@ -1866,7 +1889,7 @@ export default function App() {
                 if (next) computeHoopframeWarning();
                 if (!next && checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTop = 0;
               }}
-              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#E3E3E3", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 16 }}
+              style={{ width: 28, height: 28, borderRadius: 999, border: "none", background: "#E3E3E3", color: "#6A6A6A", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, cursor: "pointer", marginLeft: 4 }}
             >
               <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <span style={{ position: "absolute", display: "flex", alignItems: "center", justifyContent: "center", transition: "opacity 0.2s, transform 0.2s", opacity: checkoutDrawerExpanded ? 0 : 1, transform: checkoutDrawerExpanded ? "scale(0.6)" : "scale(1)" }}>
