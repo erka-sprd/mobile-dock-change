@@ -2,6 +2,8 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { Drawer } from "vaul";
 import EmbroideryPreview, { renderEmbroidery } from "./EmbroideryPreview";
 import SizeSelection from "./SizeSelection";
+import { loadDockProducts, EMPTY_DOCK_PRODUCT } from "./catalog";
+import type { DockProduct } from "./catalog";
 
 const BASE_PRODUCT_PRICE = 17.98;
 const SURCHARGE_EMBROIDERY = 6;
@@ -13,119 +15,17 @@ const EDITOR_MIN = 170;
 const THRESHOLD = 10;
 const EDITOR_BOTTOM_OFFSET = 80; // extra bottom padding to shift product upward from center
 
-type ProductColor = { key: string; label: string };
-type ProductConfig = {
-  id: string;
-  name: string;
-  folder: string;
-  prefix: string;
-  colors: ProductColor[];
-  defaultColor: string;
-  sizes: readonly string[];
-  outOfStock: Record<string, string[]>;
-  hasCloseup: (key: string) => boolean;
-  printAreas: Record<string, { x: number; y: number; w: number; h: number }>;
-  thumbnail: (colorKey: string) => string;
-};
-
-const COLOR_HEX: Record<string, string> = {
-  black:       "#1A1A1A",
-  heathergrey: "#A8A8A8",
-  khaki:       "#504A33",
-  mocha:       "#7D5C4D",
-  navyblue:    "#1C2D50",
-  pinkjoy:     "#F0A0B8",
-  softEcru:    "#EDE0CA",
-  stone:       "#8A7F74",
-  violet:      "#9398BF",
-  white:       "#FFFFFF",
-  gray:        "#9E9E9E",
-  graugrun:    "#6B7B6A",
-  yellow:      "#F0CE3C",
-};
-
-const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
-  "oversized-unisex-tshirt": {
-    id: "oversized-unisex-tshirt",
-    name: "Stanley/Stella Oversized Unisex Organic T-shirt Blaster 2.0",
-    folder: "oversized-unisex-tshirt",
-    prefix: "tshirt-oversize-unisex",
-    colors: [
-      { key: "black",       label: "Black" },
-      { key: "heathergrey", label: "Heather Grey" },
-      { key: "khaki",       label: "Khaki" },
-      { key: "mocha",       label: "Mocha" },
-      { key: "navyblue",    label: "Navy Blue" },
-      { key: "pinkjoy",     label: "Pink Joy" },
-      { key: "softEcru",    label: "Soft Ecru" },
-      { key: "stone",       label: "Stone" },
-      { key: "violet",      label: "Violet" },
-      { key: "white",       label: "White" },
-    ],
-    defaultColor: "softEcru",
-    sizes: ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"],
-    outOfStock: {
-      black:       ["XS", "3XL", "4XL"],
-      heathergrey: ["S", "XXL"],
-      khaki:       ["XS", "S", "4XL"],
-      mocha:       ["3XL", "4XL"],
-      navyblue:    ["XS", "4XL"],
-      pinkjoy:     ["S", "M", "3XL", "4XL"],
-      softEcru:    ["XL", "XXL", "3XL"],
-      stone:       ["XS", "S"],
-      violet:      ["4XL"],
-      white:       ["XS", "M", "3XL", "4XL"],
-    },
-    hasCloseup: (key) => key !== "mocha",
-    printAreas: {
-      "Front":     { x: 0.27,  y: 0.22, w: 0.44, h: 0.50 },
-      "Back":      { x: 0.275, y: 0.22, w: 0.44, h: 0.50 },
-      "Left Arm":  { x: 0.43,  y: 0.34, w: 0.20, h: 0.40 },
-      "Right Arm": { x: 0.37,  y: 0.34, w: 0.20, h: 0.40 },
-    },
-    thumbnail: (key) => `/img/product-images/oversized-unisex-tshirt/tshirt-oversize-unisex-${key}-front.webp`,
-  },
-  "unisex-hoodie": {
-    id: "unisex-hoodie",
-    name: "Unisex Hoodie",
-    folder: "unisex-hoodie",
-    prefix: "unisex-hoodie",
-    colors: [
-      { key: "gray",     label: "Gray" },
-      { key: "graugrun", label: "Graugrün" },
-      { key: "yellow",   label: "Yellow" },
-    ],
-    defaultColor: "gray",
-    sizes: ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"],
-    outOfStock: {
-      gray:     ["XS", "5XL"],
-      graugrun: ["S", "4XL", "5XL"],
-      yellow:   ["XS", "M", "3XL", "5XL"],
-    },
-    hasCloseup: () => false,
-    // NOTE: approximate print areas — adjust x/y/w/h as needed
-    printAreas: {
-      "Front":     { x: 0.28,  y: 0.25, w: 0.42, h: 0.36 },
-      "Back":      { x: 0.275, y: 0.25, w: 0.43, h: 0.42 },
-      "Left Arm":  { x: 0.43,  y: 0.28, w: 0.15, h: 0.28 },
-      "Right Arm": { x: 0.39,  y: 0.28, w: 0.15, h: 0.28 },
-    },
-    thumbnail: (key) => `/img/product-images/unisex-hoodie/unisex-hoodie-${key}-front.webp`,
-  },
-};
-
-
-const getSlidesForProduct = (productId: string, colorKey: string) => {
-  const cfg = PRODUCT_CONFIGS[productId];
-  const base = `/img/product-images/${cfg.folder}/${cfg.prefix}-${colorKey}`;
-  return [
-    { label: "Front",     src: `${base}-front.webp` },
-    { label: "Back",      src: `${base}-back.webp` },
-    { label: "Left Arm",  src: `${base}-leftarm.webp` },
-    { label: "Right Arm", src: `${base}-rightarm.webp` },
-    ...(cfg.hasCloseup(colorKey) ? [{ label: "Close Up", src: `${base}-closeup.webp` }] : []),
-  ];
-};
+// Whether a hex colour is light enough that a dark checkmark reads better on it.
+function isLightHex(hex: string): boolean {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255,
+    g = (n >> 8) & 255,
+    b = n & 255;
+  // Perceived luminance (Rec. 601).
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.7;
+}
 
 function getContainRect(containerW: number, containerH: number, imgW: number, imgH: number) {
   const containerRatio = containerW / containerH;
@@ -147,18 +47,44 @@ export default function App() {
   const [imageNaturalSize, setImageNaturalSize] = useState({ width: 1, height: 1 });
   const [editorSize, setEditorSize] = useState({ width: 0, height: 0 });
 
-  const [selectedProductId, setSelectedProductId] = useState(() => {
-    const saved = localStorage.getItem("selectedProductId");
-    return saved && PRODUCT_CONFIGS[saved] ? saved : "unisex-hoodie";
-  });
-  const selectedProduct = PRODUCT_CONFIGS[selectedProductId];
-  const [selectedColor, setSelectedColor] = useState(() => {
-    const savedProduct = localStorage.getItem("selectedProductId");
-    const cfg = savedProduct && PRODUCT_CONFIGS[savedProduct] ? PRODUCT_CONFIGS[savedProduct] : PRODUCT_CONFIGS["unisex-hoodie"];
-    const savedColor = localStorage.getItem("selectedColor");
-    return savedColor && cfg.colors.find(c => c.key === savedColor) ? savedColor : cfg.defaultColor;
-  });
-  const slides = getSlidesForProduct(selectedProductId, selectedColor);
+  // Product catalogue, fetched at runtime from the shared catalog deployment.
+  const [products, setProducts] = useState<DockProduct[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState(
+    () => localStorage.getItem("selectedProductId") ?? ""
+  );
+  const [selectedColor, setSelectedColor] = useState(
+    () => localStorage.getItem("selectedColor") ?? ""
+  );
+  const selectedProduct =
+    products.find(p => p.id === selectedProductId) ?? products[0] ?? EMPTY_DOCK_PRODUCT;
+
+  // Load the catalogue once, then reconcile the selected product/colour against
+  // what the catalogue actually contains (saved ids may be stale or empty).
+  useEffect(() => {
+    let cancelled = false;
+    loadDockProducts().then(({ products: loaded, featuredProductId }) => {
+      if (cancelled) return;
+      setProducts(loaded);
+      const saved = localStorage.getItem("selectedProductId");
+      const initial =
+        loaded.find(p => p.id === saved) ??
+        loaded.find(p => p.id === featuredProductId) ??
+        loaded[0];
+      if (!initial) return;
+      setSelectedProductId(initial.id);
+      const savedColor = localStorage.getItem("selectedColor");
+      const colorOk = initial.colors.some(c => c.key === savedColor);
+      setSelectedColor(colorOk ? savedColor! : initial.defaultColor);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const slides = useMemo(
+    () => selectedProduct.slidesFor(selectedColor),
+    [selectedProduct, selectedColor]
+  );
   const savedSlideIndex = parseInt(localStorage.getItem("activeSlideIndex") ?? "0", 10) || 0;
   const [index, setIndex] = useState(savedSlideIndex);
 
@@ -253,6 +179,17 @@ export default function App() {
   const [designBbox, setDesignBbox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [hoopframeWarning, setHoopframeWarning] = useState(false);
 
+  // ---- Live on-canvas embroidery preview (stitched render overlaid on the
+  // design while it sits on the product canvas, like the b2b designer). ----
+  const [canvasEmbDataUrl, setCanvasEmbDataUrl] = useState<string | null>(null);
+  const [canvasEmbRenderedUrl, setCanvasEmbRenderedUrl] = useState<string | null>(null);
+  const [canvasEmbBbox, setCanvasEmbBbox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [canvasEmbLoading, setCanvasEmbLoading] = useState(false);
+  // First reveal in a session shows a "Embroidery preview…" label for an extra
+  // beat so it's readable; later reveals just show a small spinner.
+  const canvasEmbEverShownRef = useRef(false);
+  const [canvasEmbFirstDelayPassed, setCanvasEmbFirstDelayPassed] = useState(false);
+
   type DesignItem = { id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number; color?: string; };
   const [allDesignItems, setAllDesignItems] = useState<Record<string, DesignItem[]>>(() => {
     try {
@@ -291,6 +228,22 @@ export default function App() {
 
   const hasAnyItems = Object.keys(allDesignItems).some((k) => (allDesignItems[k] as DesignItem[]).length > 0);
   const activeIsEmpty = designItems.length === 0;
+
+  // On-canvas embroidery is active only for embroidery-suitable products (so we
+  // never stitch-render on stickers etc.) when the chosen technique is embroidery.
+  const embroiderySupported = !!selectedProduct.embroidery;
+  const onCanvasEmbroidery = embroiderySupported && savedPrintTechnique === "embroidery";
+  // Signature of everything that changes the stitched look of the current slide.
+  const canvasEmbSig = useMemo(
+    () =>
+      JSON.stringify({
+        slide: currentSlideLabel,
+        color: selectedColor,
+        on: onCanvasEmbroidery,
+        items: designItems.map(i => [i.type, i.content, i.src, i.x, i.y, i.w, i.fontSize, i.color]),
+      }),
+    [currentSlideLabel, selectedColor, onCanvasEmbroidery, designItems]
+  );
   const [showPopup, setShowPopup] = useState(!hasAnyItems);
   const [showDesignRow, setShowDesignRow] = useState(false);
   const [animating, setAnimating] = useState(false);
@@ -936,6 +889,64 @@ export default function App() {
     localStorage.setItem("designItems", JSON.stringify(allDesignItems));
   }, [allDesignItems]);
 
+  // Drive the on-canvas embroidery render: whenever the design (or product /
+  // colour / technique) changes and we're not mid-drag, flatten the current
+  // slide and feed it to the off-screen EmbroideryPreview, which produces the
+  // stitched result (canvasEmbRenderedUrl) that we overlay on the canvas.
+  useEffect(() => {
+    if (!onCanvasEmbroidery || designItems.length === 0) {
+      setCanvasEmbDataUrl(null);
+      setCanvasEmbRenderedUrl(null);
+      setCanvasEmbBbox(null);
+      setCanvasEmbLoading(false);
+      return;
+    }
+    // Keep the last stitched overlay frozen while dragging/resizing — the live,
+    // flat element is shown instead during manipulation.
+    if (designGestureActive) return;
+    let cancelled = false;
+    setCanvasEmbLoading(true);
+    flattenDesignItems().then(({ dataUrl, bbox }) => {
+      if (cancelled) return;
+      setCanvasEmbBbox(bbox);
+      setCanvasEmbDataUrl(dataUrl || null);
+      // EmbroideryPreview's onRendered clears loading + sets the rendered url.
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Re-run once the print area is first measured (currentPARef becomes non-null);
+    // bbox is fraction-of-PA so zoom/pan size changes don't need a re-flatten.
+  }, [onCanvasEmbroidery, canvasEmbSig, designGestureActive, !!currentPA]);
+
+  // First reveal in a session lingers on the "Embroidery preview…" label a beat.
+  useEffect(() => {
+    if (canvasEmbRenderedUrl && !canvasEmbEverShownRef.current && !canvasEmbFirstDelayPassed) {
+      const t = setTimeout(() => setCanvasEmbFirstDelayPassed(true), 1000);
+      return () => clearTimeout(t);
+    }
+  }, [canvasEmbRenderedUrl, canvasEmbFirstDelayPassed]);
+
+  const canvasEmbReady = canvasEmbEverShownRef.current || canvasEmbFirstDelayPassed;
+  const showCanvasEmb =
+    onCanvasEmbroidery &&
+    !designGestureActive &&
+    !!canvasEmbRenderedUrl &&
+    !!canvasEmbBbox &&
+    designItems.length > 0 &&
+    canvasEmbReady;
+  const showCanvasEmbSpinner =
+    onCanvasEmbroidery &&
+    !designGestureActive &&
+    designItems.length > 0 &&
+    (canvasEmbLoading || (!!canvasEmbRenderedUrl && !canvasEmbReady));
+  // Hide the flat (live) art whenever the stitched overlay or its spinner is up.
+  const hideFlatForEmb = (showCanvasEmb || showCanvasEmbSpinner) && !designGestureActive;
+
+  useEffect(() => {
+    if (showCanvasEmb) canvasEmbEverShownRef.current = true;
+  }, [showCanvasEmb]);
+
   // Clamp design bbox to max 1/7 of print area (by area), anchored to center. Embroidery only.
   const clampEmbroideryBbox = (bbox: { left: number; top: number; width: number; height: number }) => {
     const maxAreaFraction = 1 / 7;
@@ -1561,14 +1572,14 @@ export default function App() {
                       }}
                     >
                       {item.type === "image" ? (
-                        <img src={item.src} alt="" draggable={false} style={{ display: "block", width: item.w, height: item.w, objectFit: "contain", userSelect: "none", WebkitUserSelect: "none" }} />
+                        <img src={item.src} alt="" draggable={false} style={{ display: "block", width: item.w, height: item.w, objectFit: "contain", userSelect: "none", WebkitUserSelect: "none", opacity: hideFlatForEmb ? 0 : 1 }} />
                       ) : (
                         <span style={{
                           display: "block",
                           fontSize: item.fontSize,
                           fontFamily: '"CarterOne", cursive',
                           fontWeight: 400,
-                          color: item.color ?? "#3F920C",
+                          color: hideFlatForEmb ? "transparent" : (item.color ?? "#3F920C"),
                           lineHeight: 0.9,
                           whiteSpace: "pre-line",
                           userSelect: "none",
@@ -1678,12 +1689,84 @@ export default function App() {
                     </div>
                   );
                 })}
+
+                {/* Live stitched embroidery overlay, positioned over the design's
+                    bounding box within the print area. Hidden during drag (the
+                    flat element is shown instead) and on non-embroidery products. */}
+                {showCanvasEmb && canvasEmbBbox && (
+                  <img
+                    src={canvasEmbRenderedUrl!}
+                    alt=""
+                    draggable={false}
+                    style={{
+                      position: "absolute",
+                      left: currentPA.left + canvasEmbBbox.left * currentPA.width,
+                      top: currentPA.top + canvasEmbBbox.top * currentPA.height,
+                      width: canvasEmbBbox.width * currentPA.width,
+                      height: canvasEmbBbox.height * currentPA.height,
+                      objectFit: "fill",
+                      pointerEvents: "none",
+                      zIndex: 8,
+                    }}
+                  />
+                )}
+
+                {/* Render spinner + intro label centred over the design. */}
+                {showCanvasEmbSpinner && canvasEmbBbox && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: currentPA.left + (canvasEmbBbox.left + canvasEmbBbox.width / 2) * currentPA.width,
+                      top: currentPA.top + (canvasEmbBbox.top + canvasEmbBbox.height / 2) * currentPA.height,
+                      transform: `translate(-50%, -50%) scale(${1 / zoom})`,
+                      transformOrigin: "center center",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      background: "#000",
+                      borderRadius: 999,
+                      padding: canvasEmbEverShownRef.current ? 10 : "10px 16px 10px 10px",
+                      boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+                      pointerEvents: "none",
+                      zIndex: 9,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 26,
+                        height: 26,
+                        flexShrink: 0,
+                        borderRadius: "50%",
+                        border: "3px solid rgba(255,255,255,0.3)",
+                        borderTopColor: "#fff",
+                        animation: "spin 0.8s linear infinite",
+                      }}
+                    />
+                    {!canvasEmbEverShownRef.current && (
+                      <span style={{ color: "#fff", fontSize: 14, fontWeight: 500 }}>Embroidery preview…</span>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}
 
 
         </div>
+
+        {/* Off-screen processor that renders the live on-canvas embroidery. */}
+        {onCanvasEmbroidery && canvasEmbDataUrl && (
+          <EmbroideryPreview
+            src={canvasEmbDataUrl}
+            maxSize={500}
+            style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 1, height: 1 }}
+            onRendered={url => {
+              setCanvasEmbRenderedUrl(url);
+              setCanvasEmbLoading(false);
+            }}
+          />
+        )}
 
 
         {/* Side chevrons — visible at MAX */}
@@ -1929,8 +2012,8 @@ export default function App() {
             return (
               <div style={{ opacity: interp, overflow: "hidden", maxHeight: `${interp * 80}px`, transition: "opacity 0.3s ease, max-height 0.3s ease" }}>
                 <div style={{ paddingLeft: 20, marginTop: 0, marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", color: "#6a6a6a", textTransform: "uppercase", marginBottom: 10 }}>
-                    COLOR: {selectedProduct.colors.find(c => c.key === selectedColor)?.label.toUpperCase()}
+                  <div style={{ fontSize: 14, color: "#6a6a6a", marginBottom: 10 }}>
+                    Color: {selectedProduct.colors.find(c => c.key === selectedColor)?.label}
                   </div>
                   <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginBottom: 2 }}>
                     {currentPrice.toFixed(2).replace(".", ",") + " €"}
@@ -1942,7 +2025,7 @@ export default function App() {
           })()}
           {(() => { const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))); return (
           <div onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} style={{ display: "flex", overflowX: "auto", gap: 4, padding: "0 16px", marginBottom: 14, marginTop: `${8 - interp * 8}px`, scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x", transition: checkoutDrawerDragging ? "none" : "margin-top 0.3s ease" }}>
-            {selectedProduct.colors.map(({ key, label }) => (
+            {selectedProduct.colors.map(({ key, label, hex }) => (
                 <button
                   key={key}
                   type="button"
@@ -1958,9 +2041,9 @@ export default function App() {
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}
                 >
-                  <div style={{ width: "75%", height: "75%", borderRadius: "50%", background: COLOR_HEX[key] ?? "#ccc", boxShadow: key === selectedColor ? `0 0 0 2px #F4F4F4, 0 0 0 3px #111` : `0 0 0 2px #F4F4F4, 0 0 0 3px #d0d0d0`, display: "flex", alignItems: "center", justifyContent: "center", transition: "box-shadow 0.2s ease" }}>
+                  <div style={{ width: "75%", height: "75%", borderRadius: "50%", background: hex || "#ccc", boxShadow: key === selectedColor ? `0 0 0 2px #F4F4F4, 0 0 0 3px #111` : `0 0 0 2px #F4F4F4, 0 0 0 3px #d0d0d0`, display: "flex", alignItems: "center", justifyContent: "center", transition: "box-shadow 0.2s ease" }}>
                     {key === selectedColor && (
-                      <svg width="45%" height="45%" viewBox="0 0 24 24" fill="none" stroke={key === "white" || key === "softEcru" || key === "yellow" || key === "pinkjoy" ? "#555" : "#fff"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <svg width="45%" height="45%" viewBox="0 0 24 24" fill="none" stroke={isLightHex(hex) ? "#555" : "#fff"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     )}
@@ -2135,33 +2218,23 @@ export default function App() {
                         </button>
                       )}
                     <div ref={otherProductsScrollRef} onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} onScroll={e => { const el = e.currentTarget; setOtherProductsScrollPos({ atStart: el.scrollLeft <= 0, atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 }); }} style={{ overflowX: "auto", display: "flex", gap: 8, padding: "0 20px 4px", scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x" }}>
-                      {[
-                        { productId: null, name: "Women Cropped Tank",         thumbnail: `/img/product-images/women-cropped-tank/women-cropped-tank-black.webp` },
-                        { productId: "unisex-hoodie",           name: "Unisex Hoodie",                    thumbnail: PRODUCT_CONFIGS["unisex-hoodie"].thumbnail(PRODUCT_CONFIGS["unisex-hoodie"].defaultColor) },
-                        { productId: null, name: "Relaxed Vintage Cap",        thumbnail: `/img/product-images/relaxed-vintage-cap/relaxed-vintage cap-green.webp` },
-                        { productId: null, name: "Stripped Tennis Socks",      thumbnail: `/img/product-images/stripped-tennis-socks/stripped-tennis-socks-whitemint.webp` },
-                        { productId: "oversized-unisex-tshirt", name: "Stanley/Stella Oversized T-shirt", thumbnail: PRODUCT_CONFIGS["oversized-unisex-tshirt"].thumbnail(PRODUCT_CONFIGS["oversized-unisex-tshirt"].defaultColor) },
-                        { productId: null, name: "Organic Tote Bag",           thumbnail: `/img/product-images/organic-tote-bag/organic-tote-bag-beige.webp` },
-                        { productId: null, name: "Women Boxy Organic T-shirt", thumbnail: `/img/product-images/women-boxy-organic-tshirt/women-boxy-organic-tshirt-yellow.webp` },
-                      ].filter(({ productId }) => productId !== selectedProductId).map(({ productId, name, thumbnail }) => (
+                      {products.filter(p => p.id !== selectedProductId).map(p => (
                         <button
-                          key={name}
+                          key={p.id}
                           type="button"
                           onClick={() => {
-                            if (!productId) return;
-                            const cfg = PRODUCT_CONFIGS[productId];
-                            setSelectedProductId(productId);
-                            setSelectedColor(cfg.defaultColor);
+                            setSelectedProductId(p.id);
+                            setSelectedColor(p.defaultColor);
                             setIndex(0);
                             setActiveIndex(0);
                             setTimeout(() => { if (checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTo({ top: 0, behavior: "smooth" }); }, 50);
                           }}
-                          style={{ flexShrink: 0, width: 130, background: "none", border: "none", borderRadius: 0, overflow: "visible", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0 }}
+                          style={{ flexShrink: 0, width: 130, background: "none", border: "none", borderRadius: 0, overflow: "visible", cursor: "pointer", textAlign: "left", padding: 0 }}
                         >
                           <div style={{ width: "100%", height: 150, background: "#e9e9e9", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <img src={thumbnail} alt={name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+                            <img src={p.thumbnail(p.defaultColor)} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
                           </div>
-                          <div style={{ paddingTop: 8, fontSize: 12, fontWeight: 500, color: "#6a6a6a", lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{name}</div>
+                          <div style={{ paddingTop: 8, fontSize: 12, fontWeight: 500, color: "#6a6a6a", lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{p.name}</div>
                         </button>
                       ))}
                     </div>
@@ -2532,7 +2605,7 @@ export default function App() {
                   {/* 2 — model front */}
                   {(() => {
                     const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
-                    const pa = selectedProduct.printAreas["Front"];
+                    const pa = selectedProduct.printAreas["Front"] ?? { x: 0, y: 0, w: 1, h: 1 };
                     const effectiveBbox = designBbox && printTechnique === "embroidery" ? clampEmbroideryBbox(designBbox) : designBbox;
                     const needsSizeWarning = (() => {
                       if (!designBbox || printTechnique !== "embroidery") return false;
@@ -2603,7 +2676,7 @@ export default function App() {
                         }}
                       >
                         <img
-                          src={selectedProductId === "oversized-unisex-tshirt" ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp` : selectedProduct.thumbnail(selectedColor)}
+                          src={selectedProduct.thumbnail(selectedColor)}
                           alt="Model Front"
                           style={{ position: "absolute", width: "100%", height: "100%", objectFit: "cover", transform: `translate(${previewImgTransform.x}px, ${previewImgTransform.y}px) scale(${previewImgTransform.zoom})`, transformOrigin: "center center", willChange: "transform", WebkitTouchCallout: "none" } as React.CSSProperties}
                         />
@@ -2836,23 +2909,13 @@ export default function App() {
             </div>
             <div style={{ overflowY: "auto", flex: 1, padding: "0 16px 24px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                {[
-                  { productId: "unisex-hoodie",           name: "Unisex Hoodie",                thumbnail: PRODUCT_CONFIGS["unisex-hoodie"].thumbnail(PRODUCT_CONFIGS["unisex-hoodie"].defaultColor) },
-                  { productId: null, name: "Organic Tote Bag",           thumbnail: `/img/product-images/organic-tote-bag/organic-tote-bag-beige.webp` },
-                  { productId: null, name: "Relaxed Vintage Cap",        thumbnail: `/img/product-images/relaxed-vintage-cap/relaxed-vintage cap-green.webp` },
-                  { productId: null, name: "Stripped Tennis Socks",      thumbnail: `/img/product-images/stripped-tennis-socks/stripped-tennis-socks-whitemint.webp` },
-                  { productId: null, name: "Women Boxy Organic T-shirt", thumbnail: `/img/product-images/women-boxy-organic-tshirt/women-boxy-organic-tshirt-yellow.webp` },
-                  { productId: null, name: "Women Cropped Tank",         thumbnail: `/img/product-images/women-cropped-tank/women-cropped-tank-black.webp` },
-                  { productId: "oversized-unisex-tshirt", name: "Stanley/Stella Oversized Unisex Organic T-shirt Blaster 2.0", thumbnail: PRODUCT_CONFIGS["oversized-unisex-tshirt"].thumbnail(PRODUCT_CONFIGS["oversized-unisex-tshirt"].defaultColor) },
-                ].map(({ productId, name, thumbnail }) => (
+                {products.map(p => (
                   <button
-                    key={name}
+                    key={p.id}
                     type="button"
                     onClick={() => {
-                      if (!productId) return;
-                      const cfg = PRODUCT_CONFIGS[productId];
-                      setSelectedProductId(productId);
-                      setSelectedColor(cfg.defaultColor);
+                      setSelectedProductId(p.id);
+                      setSelectedColor(p.defaultColor);
                       setIndex(0);
                       setActiveIndex(0);
                       setAllProductsDrawerOpen(false);
@@ -2861,12 +2924,12 @@ export default function App() {
                       computeHoopframeWarning();
                       if (showPopup) dismissPopup();
                     }}
-                    style={{ background: "none", border: "none", borderRadius: 0, overflow: "hidden", cursor: productId ? "pointer" : "default", textAlign: "left", padding: 0, width: "100%" }}
+                    style={{ background: "none", border: "none", borderRadius: 0, overflow: "hidden", cursor: "pointer", textAlign: "left", padding: 0, width: "100%" }}
                   >
-                    <div style={{ width: "100%", aspectRatio: "3/4", background: "#e9e9e9", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: selectedProductId === productId ? "inset 0 0 0 2px #111" : "none" }}>
-                      <img src={thumbnail} alt={name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+                    <div style={{ width: "100%", aspectRatio: "3/4", background: "#e9e9e9", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: selectedProductId === p.id ? "inset 0 0 0 2px #111" : "none" }}>
+                      <img src={p.thumbnail(p.defaultColor)} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
                     </div>
-                    <div style={{ paddingTop: 6, fontSize: 12, fontWeight: 500, color: "#6a6a6a", lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{name}</div>
+                    <div style={{ paddingTop: 6, fontSize: 12, fontWeight: 500, color: "#6a6a6a", lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{p.name}</div>
                   </button>
                 ))}
               </div>
@@ -3012,9 +3075,7 @@ export default function App() {
       </div>
 
       {modelPopupOpen && (() => {
-        const modelSrc = selectedProductId === "oversized-unisex-tshirt"
-          ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp`
-          : selectedProduct.thumbnail(selectedColor);
+        const modelSrc = selectedProduct.thumbnail(selectedColor);
         const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
         return (
           <div onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()} onPointerUp={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()} className={modelPopupClosing ? "popup-dismiss" : "popup-reveal"} style={{ position: "fixed", inset: 0, zIndex: 100000, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "all" }}>

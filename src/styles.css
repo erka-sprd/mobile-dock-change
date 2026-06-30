@@ -33,6 +33,10 @@
   100% { background-position: -200% 0; }
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .action-bar-btn:active {
   background: #ededed !important;
   transition: background 0.05s ease !important;
