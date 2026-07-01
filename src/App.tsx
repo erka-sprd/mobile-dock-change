@@ -185,6 +185,16 @@ export default function App() {
   const [canvasEmbRenderedUrl, setCanvasEmbRenderedUrl] = useState<string | null>(null);
   const [canvasEmbBbox, setCanvasEmbBbox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [canvasEmbLoading, setCanvasEmbLoading] = useState(false);
+  // True between a drag/resize release and the next flatten completing at the
+  // final position. While settling we keep the flat element visible (no spinner,
+  // no overlay) so the stitched render reappears at the settled spot with no jump
+  // — otherwise it flashes at the pre-drag bounding box before repositioning.
+  const [canvasEmbSettling, setCanvasEmbSettling] = useState(false);
+  // Last flattened design URL fed to EmbroideryPreview. Used to detect when a
+  // re-flatten produced an identical image — in which case EmbroideryPreview's
+  // effect won't re-run (so onRendered won't fire) and we must clear the spinner
+  // ourselves, otherwise it spins forever.
+  const canvasEmbDataUrlRef = useRef<string | null>(null);
   // First reveal in a session shows a "Embroidery preview…" label for an extra
   // beat so it's readable; later reveals just show a small spinner.
   const canvasEmbEverShownRef = useRef(false);
@@ -895,10 +905,12 @@ export default function App() {
   // stitched result (canvasEmbRenderedUrl) that we overlay on the canvas.
   useEffect(() => {
     if (!onCanvasEmbroidery || designItems.length === 0) {
+      canvasEmbDataUrlRef.current = null;
       setCanvasEmbDataUrl(null);
       setCanvasEmbRenderedUrl(null);
       setCanvasEmbBbox(null);
       setCanvasEmbLoading(false);
+      setCanvasEmbSettling(false);
       return;
     }
     // Keep the last stitched overlay frozen while dragging/resizing — the live,
@@ -908,9 +920,32 @@ export default function App() {
     setCanvasEmbLoading(true);
     flattenDesignItems().then(({ dataUrl, bbox }) => {
       if (cancelled) return;
+      // Reposition the overlay to the freshly measured bounding box first.
       setCanvasEmbBbox(bbox);
-      setCanvasEmbDataUrl(dataUrl || null);
-      // EmbroideryPreview's onRendered clears loading + sets the rendered url.
+      const next = dataUrl || null;
+      if (!next) {
+        // Nothing to render — clear the overlay and stop the spinner.
+        canvasEmbDataUrlRef.current = null;
+        setCanvasEmbDataUrl(null);
+        setCanvasEmbRenderedUrl(null);
+        setCanvasEmbLoading(false);
+        setCanvasEmbSettling(false);
+        return;
+      }
+      if (next === canvasEmbDataUrlRef.current) {
+        // Identical flatten (a pure move, or a tap that didn't change the
+        // design): the crop is byte-identical so the existing stitched render is
+        // still valid — just move it to the new bbox and reveal. EmbroideryPreview
+        // won't re-run, so we clear the spinner/settle here ourselves.
+        setCanvasEmbLoading(false);
+        setCanvasEmbSettling(false);
+        return;
+      }
+      // New design: feed it to EmbroideryPreview. Stay in the settling/loading
+      // state until its onRendered fires, so the flat element holds until the new
+      // stitched render is ready at the final position (no jump, no stale frame).
+      canvasEmbDataUrlRef.current = next;
+      setCanvasEmbDataUrl(next);
     });
     return () => {
       cancelled = true;
@@ -931,6 +966,7 @@ export default function App() {
   const showCanvasEmb =
     onCanvasEmbroidery &&
     !designGestureActive &&
+    !canvasEmbSettling &&
     !!canvasEmbRenderedUrl &&
     !!canvasEmbBbox &&
     designItems.length > 0 &&
@@ -938,6 +974,7 @@ export default function App() {
   const showCanvasEmbSpinner =
     onCanvasEmbroidery &&
     !designGestureActive &&
+    !canvasEmbSettling &&
     designItems.length > 0 &&
     (canvasEmbLoading || (!!canvasEmbRenderedUrl && !canvasEmbReady));
   // Hide the flat (live) art whenever the stitched overlay or its spinner is up.
@@ -1259,7 +1296,12 @@ export default function App() {
   const handleDesignEnd = () => {
     const g = designGestureRef.current;
     designGestureRef.current = { type: "idle" };
-    if (g.type !== "idle") pendingSnapItemId.current = g.itemId;
+    if (g.type !== "idle") {
+      pendingSnapItemId.current = g.itemId;
+      // Hold the flat element until the design re-flattens at its final spot, so
+      // the stitched overlay doesn't flash at the pre-drag position.
+      setCanvasEmbSettling(true);
+    }
     setDesignGestureActive(false);
     setSnapGuides({ h: false, v: false });
   };
@@ -1548,7 +1590,7 @@ export default function App() {
                       }}
                       onTouchStart={(e) => {
                         e.stopPropagation();
-                        pushHistory();
+                        // Bring to front + select on the first tap.
                         setSelectedDesignId(item.id);
                         setDesignItems(prev => {
                           const idx = prev.findIndex(d => d.id === item.id);
@@ -1557,6 +1599,10 @@ export default function App() {
                           next.push(next.splice(idx, 1)[0]);
                           return next;
                         });
+                        // Only an already-selected item can be dragged — the first
+                        // tap just selects; a subsequent touch begins the move.
+                        if (!isSelected) return;
+                        pushHistory();
                         const touch = e.touches[0];
                         designGestureRef.current = {
                           type: "move",
@@ -1628,13 +1674,22 @@ export default function App() {
                           : corner === "tr" ? { top: 0, left: iW }
                           : corner === "bl" ? { top: iH, left: 0 }
                           : { top: iH, left: iW };
+                        // Bias each hit zone outward from the corner (instead of
+                        // centring on it) so it barely overlaps the object body —
+                        // that keeps the interior free for moving, while the corner
+                        // stays a big, easy resize target.
+                        const tx = corner === "tl" || corner === "bl" ? "-72%" : "-28%";
+                        const ty = corner === "tl" || corner === "tr" ? "-72%" : "-28%";
+                        // The corner point lands at these coords inside the biased
+                        // hit box — keep the visible nub there so it stays on the corner.
+                        const nubLeft = corner === "tl" || corner === "bl" ? "72%" : "28%";
+                        const nubTop = corner === "tl" || corner === "tr" ? "72%" : "28%";
                         return (
                           <div key={corner} style={{
                             position: "absolute",
                             width: HIT, height: HIT,
-                            display: "flex", alignItems: "center", justifyContent: "center",
                             touchAction: "none", zIndex: 3,
-                            transform: `translate(-50%, -50%) scale(${1 / zoom})`,
+                            transform: `translate(${tx}, ${ty}) scale(${1 / zoom})`,
                             transformOrigin: "center center",
                             ...cornerPos,
                           }}
@@ -1678,6 +1733,9 @@ export default function App() {
                             }}
                           >
                             <div style={{
+                              position: "absolute",
+                              left: nubLeft, top: nubTop,
+                              transform: "translate(-50%, -50%)",
                               width: HANDLE, height: HANDLE, borderRadius: 999,
                               background: "#fff", border: "2px solid #4D52D2",
                               boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
@@ -1764,7 +1822,18 @@ export default function App() {
             onRendered={url => {
               setCanvasEmbRenderedUrl(url);
               setCanvasEmbLoading(false);
+              setCanvasEmbSettling(false);
             }}
+          />
+        )}
+
+        {/* Off-screen processor for the model popup's stitched preview. */}
+        {printTechnique === "embroidery" && embroideryDataUrl && (
+          <EmbroideryPreview
+            src={embroideryDataUrl}
+            maxSize={500}
+            style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 1, height: 1 }}
+            onRendered={setEmbroideryRenderedUrl}
           />
         )}
 
@@ -2071,14 +2140,6 @@ export default function App() {
                     >
                       <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ filter: "brightness(0)" }} />
                       <span style={{ flex: 1, textAlign: "left" }}>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
-                      {hoopframeWarning && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                          <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#EA580C", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", lineHeight: 1 }}>!</span>
-                          </div>
-                          <span style={{ fontSize: 12, fontWeight: 500, color: "#C2410C" }}>Attention</span>
-                        </div>
-                      )}
                       <img src="/icons/icon-chevron-down.svg" width={18} height={18} alt="" style={{ filter: "brightness(0)" }} />
                     </button>
                     </div>
@@ -2517,190 +2578,34 @@ export default function App() {
       <Drawer.Root open={previewDrawerOpen} onOpenChange={(open) => { if (!open) setPrintTechnique(savedPrintTechnique); setPreviewDrawerOpen(open); }}>
         <Drawer.Portal>
           <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
-          <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, outline: "none", fontFamily: '"Inter Variable", sans-serif', display: "flex", flexDirection: "column", height: "calc(100dvh - 32px)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 16px", flexShrink: 0 }}>
+          <Drawer.Content onContextMenu={e => e.preventDefault()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999, background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: "0 0 24px", outline: "none", fontFamily: '"Inter Variable", sans-serif' }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 12px" }}>
               <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Print technique</span>
               <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setPreviewDrawerOpen(false)} />
             </div>
-            <div style={{ display: "flex", paddingLeft: 16, paddingRight: 16, marginBottom: 16, flexShrink: 0 }}>
-              <div style={{ display: "flex", borderRadius: 999, background: "#f0f0f0", padding: 4, gap: 4, width: "100%" }}>
-                <button type="button" onClick={() => { setPrintTechnique("standard"); setSavedPrintTechnique("standard"); }} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "standard" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  <img src="/icons/icon-droplet.svg" width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
-                  Standard print
-                </button>
-                <button type="button" onClick={() => { setPrintTechnique("embroidery"); setSavedPrintTechnique("embroidery"); }} style={{ flex: 1, height: 40, padding: "0 16px", borderRadius: 999, border: "none", background: printTechnique === "embroidery" ? "#fff" : "transparent", color: "#111", fontSize: 14, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  <img src="/icons/icon-needle-embroidery.svg" width={20} height={20} alt="" style={{ display: "block", filter: "brightness(0) invert(1) brightness(0.416)" }} />
-                  Embroidery
-                </button>
-              </div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: 24, overflowY: "auto", flex: 1, minHeight: 0, touchAction: "pan-y" }}>
-              {previewLoading ? (
-                <>
-                  <div style={{ width: "100%", height: 200, flexShrink: 0, borderRadius: 0, background: "linear-gradient(90deg, #ebebeb 25%, #d6d6d6 50%, #ebebeb 75%)", backgroundSize: "200% 100%", animation: "skeletonShimmer 1.4s ease infinite" }} />
-                  <div style={{ width: "100%", height: 200, flexShrink: 0, borderRadius: 0, background: "linear-gradient(90deg, #ebebeb 25%, #d6d6d6 50%, #ebebeb 75%)", backgroundSize: "200% 100%", animation: "skeletonShimmer 1.4s ease infinite" }} />
-                </>
-              ) : (
-                <>
-                  {/* 1 — embroidery preview: zoomed garment as background, canvas centered on top */}
-                  {(() => {
-                    const paKey = slides[activeIndex]?.label ?? "Front";
-                    const pa = selectedProduct.printAreas[paKey];
-                    const paCx = pa ? pa.x + pa.w / 2 : 0.5;
-                    const paCy = pa ? pa.y + pa.h / 2 : 0.5;
-                    return (
-                      <div style={{ position: "relative", overflow: "hidden", flexShrink: 0, width: "100%", height: 245, borderRadius: 0, background: "#e8e8e8" }}>
-                        <img
-                          src={selectedProduct.thumbnail(selectedColor)}
-                          alt=""
-                          style={{
-                            position: "absolute", width: "100%", height: "100%",
-                            objectFit: "contain",
-                            transform: `scale(6)`,
-                            transformOrigin: `${paCx * 100}% ${paCy * 100}%`,
-                            WebkitTouchCallout: "none",
-                          } as React.CSSProperties}
-                        />
-                        {/* Hidden embroidery processor — only runs for embroidery mode */}
-                        {printTechnique === "embroidery" && embroideryDataUrl && (
-                          <EmbroideryPreview
-                            src={embroideryDataUrl}
-                            maxSize={500}
-                            style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 1, height: 1 }}
-                            onRendered={setEmbroideryRenderedUrl}
-                          />
-                        )}
-                        {(() => {
-                          const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
-                          return previewUrl ? (
-                            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              <img src={previewUrl} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }} />
-                            </div>
-                          ) : embroideryDataUrl && printTechnique === "embroidery" ? (
-                            <span style={{ fontSize: 14, color: "#000", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)" }}>Processing…</span>
-                          ) : null;
-                        })()}
-                      </div>
-                    );
-                  })()}
-                  {/* 2 — model front (commented out for scroll test) */}
-                  {/* {(() => {
-                    const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
-                    const pa = selectedProduct.printAreas["Front"];
-                    const leftPct   = (pa.x + (designBbox ? designBbox.left  * pa.w : 0)) * 100;
-                    const topPct    = (pa.y + (designBbox ? designBbox.top   * pa.h : 0)) * 100;
-                    const widthPct  = (designBbox ? designBbox.width  * pa.w : pa.w) * 100;
-                    const heightPct = (designBbox ? designBbox.height * pa.h : pa.h) * 100;
-                    return (
-                      <div style={{ position: "relative", overflow: "hidden", width: "100%", borderRadius: 0, background: "#f4f4f4" }}>
-                        <img src={selectedProductId === "oversized-unisex-tshirt" ? `/img/product-images/oversized-unisex-tshirt/model-images/${selectedColor}-model-front.webp` : selectedProduct.thumbnail(selectedColor)} alt="Model Front" style={{ width: "100%", height: "auto", display: "block", objectFit: "cover", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                        {previewUrl && (
-                          <div style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, width: `${widthPct}%`, height: `${heightPct}%`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <img src={previewUrl} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()} */}
-                  {/* 2 — model front */}
-                  {(() => {
-                    const previewUrl = printTechnique === "embroidery" ? embroideryRenderedUrl : embroideryDataUrl;
-                    const pa = selectedProduct.printAreas["Front"] ?? { x: 0, y: 0, w: 1, h: 1 };
-                    const effectiveBbox = designBbox && printTechnique === "embroidery" ? clampEmbroideryBbox(designBbox) : designBbox;
-                    const needsSizeWarning = (() => {
-                      if (!designBbox || printTechnique !== "embroidery") return false;
-                      const origArea = designBbox.width * designBbox.height;
-                      const clampedArea = effectiveBbox ? effectiveBbox.width * effectiveBbox.height : origArea;
-                      const s = Math.sqrt(clampedArea / origArea);
-                      return s < 0.8;
-                    })();
-                    const leftPct   = (pa.x + (effectiveBbox ? effectiveBbox.left  * pa.w : 0)) * 100;
-                    const topPct    = (pa.y + (effectiveBbox ? effectiveBbox.top   * pa.h : 0)) * 100;
-                    const widthPct  = (effectiveBbox ? effectiveBbox.width  * pa.w : pa.w) * 100;
-                    const heightPct = (effectiveBbox ? effectiveBbox.height * pa.h : pa.h) * 100;
-                    return (
-                      <div
-                        ref={previewImgContainerRef}
-                        style={{ position: "relative", overflow: "hidden", width: "100%", height: 600, flexShrink: 0, borderRadius: 0, background: "#f4f4f4", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "pan-y" }}
-                        onTouchStart={(e) => {
-                          if (e.touches.length === 2) {
-                            e.stopPropagation();
-                            const dx = e.touches[1].clientX - e.touches[0].clientX;
-                            const dy = e.touches[1].clientY - e.touches[0].clientY;
-                            previewImgGesture.current = {
-                              type: "pinch",
-                              startDist: Math.sqrt(dx * dx + dy * dy),
-                              startZoom: previewImgZoom.current,
-                              startPanX: previewImgPan.current.x,
-                              startPanY: previewImgPan.current.y,
-                              startTx: 0, startTy: 0,
-                            };
-                          }
-                        }}
-                        onTouchMove={(e) => {
-                          const g = previewImgGesture.current;
-                          if (!g) return;
-                          e.stopPropagation();
-                          const cW = previewImgContainerRef.current?.clientWidth ?? 0;
-                          const cH = previewImgContainerRef.current?.clientHeight ?? 500;
-                          if (g.type === "pinch" && e.touches.length === 2) {
-                            const dx = e.touches[1].clientX - e.touches[0].clientX;
-                            const dy = e.touches[1].clientY - e.touches[0].clientY;
-                            const dist = Math.sqrt(dx * dx + dy * dy);
-                            const newZoom = Math.max(1, Math.min(4, g.startZoom * (dist / g.startDist)));
-                            const maxX = (newZoom - 1) * cW / 2;
-                            const maxY = (newZoom - 1) * cH / 2;
-                            const x = Math.max(-maxX, Math.min(maxX, g.startPanX));
-                            const y = Math.max(-maxY, Math.min(maxY, g.startPanY));
-                            previewImgZoom.current = newZoom;
-                            previewImgPan.current = { x, y };
-                            setPreviewImgTransform({ zoom: newZoom, x, y });
-                          } else if (g.type === "pan" && e.touches.length === 1) {
-                            const maxX = (g.startZoom - 1) * cW / 2;
-                            const maxY = (g.startZoom - 1) * cH / 2;
-                            const x = Math.max(-maxX, Math.min(maxX, g.startPanX + e.touches[0].clientX - g.startTx));
-                            const y = Math.max(-maxY, Math.min(maxY, g.startPanY + e.touches[0].clientY - g.startTy));
-                            previewImgPan.current = { x, y };
-                            setPreviewImgTransform({ zoom: g.startZoom, x, y });
-                          }
-                        }}
-                        onTouchEnd={(e) => {
-                          if (previewImgGesture.current) {
-                            e.stopPropagation();
-                            e.preventDefault();
-                          }
-                          previewImgGesture.current = null;
-                          previewImgZoom.current = 1;
-                          previewImgPan.current = { x: 0, y: 0 };
-                          setPreviewImgTransform({ zoom: 1, x: 0, y: 0 });
-                        }}
-                      >
-                        <img
-                          src={selectedProduct.thumbnail(selectedColor)}
-                          alt="Model Front"
-                          style={{ position: "absolute", width: "100%", height: "100%", objectFit: "cover", transform: `translate(${previewImgTransform.x}px, ${previewImgTransform.y}px) scale(${previewImgTransform.zoom})`, transformOrigin: "center center", willChange: "transform", WebkitTouchCallout: "none" } as React.CSSProperties}
-                        />
-                        {previewUrl && (
-                          <div style={{ position: "absolute", left: `${leftPct}%`, top: `${topPct}%`, width: `${widthPct}%`, height: `${heightPct}%`, display: "flex", alignItems: "center", justifyContent: "center", transform: `translate(${previewImgTransform.x}px, ${previewImgTransform.y}px) scale(${previewImgTransform.zoom})`, transformOrigin: "center center", willChange: "transform" }}>
-                            <img src={previewUrl} style={{ maxWidth: "100%", maxHeight: "100%", display: "block", objectFit: "contain", WebkitTouchCallout: "none" } as React.CSSProperties} />
-                          </div>
-                        )}
-                        {needsSizeWarning && (
-                          <div style={{ position: "absolute", top: 10, left: 10, right: 10, pointerEvents: "none", background: "#fff", border: "1.5px solid #EA580C", fontSize: 14, fontWeight: 500, padding: "8px 12px", fontFamily: '"Inter Variable", sans-serif', display: "flex", flexDirection: "column", gap: 8 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#EA580C", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", lineHeight: 1 }}>!</span>
-                              </div>
-                              <span style={{ color: "#C2410C", fontWeight: 600 }}>Attention</span>
-                            </div>
-                            <span style={{ color: "#111" }}>We have to stitch your design smaller. This is the maximum size allowed. Adjust your design if you are not happy with the result.</span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </>
-              )}
+            <div style={{ display: "flex", flexDirection: "column", padding: "4px 16px 0" }}>
+              {([
+                { key: "standard", label: "Standard print", icon: "/icons/icon-droplet.svg" },
+                { key: "embroidery", label: "Embroidery", icon: "/icons/icon-needle-embroidery.svg" },
+              ] as const).map(({ key, label, icon }) => {
+                const selected = savedPrintTechnique === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => { setPrintTechnique(key); setSavedPrintTechnique(key); setPreviewDrawerOpen(false); }}
+                    style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", height: 60, padding: "0 16px", marginBottom: 8, borderRadius: 12, border: selected ? "2px solid #111" : "1px solid #e0e0e0", background: selected ? "#f7f7f7" : "#fff", cursor: "pointer", fontFamily: '"Inter Variable", sans-serif' }}
+                  >
+                    <img src={icon} width={22} height={22} alt="" style={{ filter: "brightness(0)" }} />
+                    <span style={{ flex: 1, textAlign: "left", fontSize: 15, fontWeight: selected ? 600 : 500, color: "#111" }}>{label}</span>
+                    {selected && (
+                      <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#111" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </Drawer.Content>
         </Drawer.Portal>

@@ -269,6 +269,9 @@ export default function EmbroideryPreview({ src, maxSize = 500, style, className
       ctx.drawImage(result, 0, 0);
       onRendered?.(canvas.toDataURL("image/png"));
     };
+    // Fall back to the flat source if the image fails to load, so callers that
+    // gate a spinner on onRendered don't hang forever.
+    img.onerror = () => onRendered?.(src);
     img.src = src;
   }, [src, maxSize]);
 
