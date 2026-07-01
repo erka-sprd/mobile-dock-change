@@ -2130,7 +2130,7 @@ export default function App() {
               <div>
                 {/* Buttons */}
                 <div style={{ padding: `0 ${Math.round(16 + interp * 4)}px`, display: "flex", flexDirection: "column", gap: 8 }}>
-                  {hasAnyItems && (
+                  {hasAnyItems && embroiderySupported && (
                     <div style={{ display: "flex", flexDirection: "column" }}>
                     <span style={{ display: "inline-block", alignSelf: "flex-start", background: "#111", color: "#fff", fontSize: 12, fontWeight: 500, padding: "3px 8px", fontFamily: '"Inter Variable", sans-serif', opacity: interp }}>Print technique</span>
                     <button
