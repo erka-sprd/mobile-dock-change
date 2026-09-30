@@ -14,6 +14,8 @@
   --color-red-600: #DC2626;
   --color-blue-700: #4D52D2;
   --color-green-600: #16A34A;
+  /* The canvas grey, top to bottom: today's mid-grey easing a hair darker. */
+  --canvas-bg: linear-gradient(180deg, #ebebeb 0%, #e4e4e4 100%);
 }
 
 .onboarding-text-gradient {
@@ -28,6 +30,184 @@
   text-align: center;
 }
 
+/* ---------------------------------------------------------------------------
+   /scrollversion — the checkout sheet, laid out inline.
+   ---------------------------------------------------------------------------
+   The same screen and the same markup; only where the sheet sits changes. It
+   stops being a drawer pinned to the bottom of the viewport and becomes an
+   ordinary block under the editor, so the page scrolls instead of the sheet.
+
+   Written here, and with !important, because everything it overrides is an
+   inline style on the element — nothing in App.tsx has to know about this
+   except the two things CSS cannot reach (see SCROLL_VERSION there). Every
+   rule is scoped to the body class, so the default route never sees any of it.
+--------------------------------------------------------------------------- */
+body.scroll-version {
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+}
+
+/* The viewport-tall frame becomes a page that grows with its content. */
+body.scroll-version [data-app-root] {
+  height: auto !important;
+  min-height: 100svh;
+  overflow-y: visible !important;
+}
+body.scroll-version [data-app-page] {
+  overflow: visible !important;
+}
+
+/* The editor keeps a fixed share of the screen — it is a stage, not something
+   to scroll past a piece at a time — and the sheet's content follows it.
+   Inline it also becomes a card: the grey is otherwise the page's own
+   background, which cannot be rounded or inset, so the stage carries it and the
+   page behind turns white for the gutter to read against. */
+body.scroll-version [data-app-root] {
+  background: #fff !important;
+}
+body.scroll-version [data-app-editor] {
+  flex: none !important;
+  /* svh, not dvh: the dynamic viewport grows as the browser hides its address
+     bar on the way down, and a stage measured against it would grow with it —
+     the product appearing to swell as you scroll. The small viewport is the
+     one that does not move. */
+  height: 70svh;
+  margin: 0 8px;
+  border-radius: 24px;
+  background: var(--canvas-bg);
+}
+
+/* The sheet itself: in the flow, square-topped, no shadow, no lift. Its grey is
+   the drawer's own surface, lifted off the canvas; as page content it is simply
+   the page, so it goes white. */
+body.scroll-version [data-ck-drawer] {
+  background: #fff !important;
+  /* It fades out while a design is selected, to clear the canvas. Inline it is
+     not over the canvas, and fading it would leave a blank page under the
+     stage — so it stays visible. Its inline pointer-events still go to none,
+     so it is there to read and not to touch while editing. */
+  opacity: 1 !important;
+  position: static !important;
+  height: auto !important;
+  margin-top: 16px;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  z-index: auto !important;
+  touch-action: auto !important;
+  overscroll-behavior: auto !important;
+}
+
+/* Its scroller stops scrolling — the page does that now. */
+body.scroll-version [data-ck-scroll] {
+  flex: none !important;
+  overflow: visible !important;
+  touch-action: auto !important;
+  overscroll-behavior: auto !important;
+}
+
+/* Drawer chrome with nothing left to do.
+
+   The fade is the sheet's "there is more below" hint, tied to its own scroller
+   reaching the end. Inline that scroller never scrolls, so it never reaches the
+   end and the hint never switches off — a grey band stuck to the foot of the
+   page. There is nothing for it to hint at here. */
+body.scroll-version [data-ck-grip],
+body.scroll-version [data-ck-veil],
+body.scroll-version [data-ck-fade] {
+  display: none !important;
+}
+
+/* The title keeps to one line and fades off at the right.
+
+   Inline it reads that off the drawer's height: one line while the sheet is
+   closed, wrapping to two once it is open. There is no open and closed here,
+   and the height still moves — dismissing the onboarding raises it — so the
+   title would start on one line and quietly become two. It is a column of the
+   header grid now, sized by the grid, and it stays one line whatever the
+   height says. */
+body.scroll-version [data-ck-title] {
+  white-space: nowrap !important;
+  max-height: 19.6px !important;
+  -webkit-mask-image: linear-gradient(to right, black 80%, transparent 100%) !important;
+  mask-image: linear-gradient(to right, black 80%, transparent 100%) !important;
+}
+
+/* Title and price start together. Centred is right for a one-line title beside
+   a button; with the title running to two lines and the price beside it, they
+   line up at the top.
+
+   touch-action too: the row takes the whole gesture so that dragging the title
+   drags the sheet. There is no sheet to drag inline, and it was the one band of
+   the page a finger could not scroll from. */
+body.scroll-version [data-ck-header] {
+  /* Two columns: the title with the colour label beneath it, and the price
+     beside them. A grid rather than a flex row so the two lines on the left are
+     rows of the same structure the price is a column of — the gap between them
+     is then row-gap, measured line to line, and not something that depends on
+     how tall the price happens to make the row. */
+  display: grid !important;
+  grid-template-columns: 1fr auto;
+  row-gap: 6px;
+  align-items: start !important;
+  touch-action: auto !important;
+  padding-bottom: 12px !important;
+}
+
+/* Both would otherwise take a cell of the grid. The pill is already collapsed
+   to nothing, and the toggle is gone (see above) — this keeps them out of the
+   layout entirely so the colour label lands under the title. */
+body.scroll-version [data-ck-cartpill] {
+  display: none !important;
+}
+
+/* Everything this block held has moved into the header or gone: the colour
+   label up, the price up, "Plus shipping" away. */
+body.scroll-version [data-ck-meta] {
+  display: none !important;
+}
+
+/* The header's close/expand toggle, and the price it used to sit beside: with
+   the price moved up into the toggle's place (App.tsx), there is nothing left
+   to close and nothing to repeat under the colour line. */
+body.scroll-version [data-ck-toggle],
+body.scroll-version [data-ck-bigprice],
+body.scroll-version [data-ck-shipping] {
+  display: none !important;
+}
+
+/* Hidden means out of the flow, not a transparent block of its own height. */
+body.scroll-version [data-ck-drawer][data-ck-hidden] {
+  display: none !important;
+}
+
+/* At the foot of the stage card, inside it — so it scrolls away with the card
+   rather than riding over the page. Absolute, not in the flow, because the
+   stage centres its contents and the bar is not one of them. */
+body.scroll-version [data-app-actionbar] {
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  z-index: 20;
+}
+
+/* Let a finger scroll the page anywhere. The sheet's own drag gestures are off
+   inline (SCROLL_VERSION in App.tsx); these are the inline styles that would
+   still swallow the movement. */
+body.scroll-version [data-app-root],
+body.scroll-version [data-app-editor] {
+  touch-action: pan-y !important;
+  overscroll-behavior: auto !important;
+}
+
+/* …except while the product is zoomed in, when a finger on the stage is panning
+   it and the page must hold still. Set by App.tsx from the zoom level. */
+body.scroll-version [data-app-editor][data-zoomed] {
+  touch-action: none !important;
+}
+
 @keyframes skeletonShimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
@@ -40,6 +220,10 @@
 .action-bar-btn:active {
   background: #ededed !important;
   transition: background 0.05s ease !important;
+}
+
+.cart-cta:active {
+  background: #333 !important;
 }
 
 .done-btn:active {
@@ -64,6 +248,125 @@
 
 .popup-dismiss {
   animation: popupDismiss 0.3s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* ---------------------------------------------------------------------------
+   Objects editor bar — ported from the main proto (see src/EditorBar.tsx).
+   What Tailwind gave the proto and inline styles cannot: the hidden scrollbar,
+   children kept at natural width, and the press states.
+--------------------------------------------------------------------------- */
+.eb-scroller {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.eb-scroller::-webkit-scrollbar {
+  display: none;
+}
+.eb-scroller > * {
+  flex-shrink: 0;
+}
+
+.eb-item {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: 6px;
+  padding: 0 8px;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #111;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.eb-item:active {
+  background: #f5f5f5;
+}
+.eb-arrow:active {
+  background: #f5f5f5;
+}
+
+/* ---- Mobile edit sheet (ported from the main proto) ---- */
+
+.press-dim:active {
+  background: #f5f5f5 !important;
+}
+
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.skeleton-pulse {
+  animation: skeletonPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes sheetFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.sheet-fade-in {
+  animation: sheetFadeIn 0.2s ease forwards;
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.slide-in-right {
+  animation: slideInRight 0.2s ease forwards;
+}
+
+/* react-colorful, restyled to create-omat's custom colour view — the same
+   rules the main proto carries in its globals.css. */
+.custom-picker-wrapper {
+  width: 100%;
+  padding: 16px 16px 0;
+  border-radius: 8px;
+}
+.custom-picker-wrapper .react-colorful {
+  width: 100% !important;
+  height: auto;
+  gap: 8px;
+  align-self: stretch;
+}
+.custom-picker-wrapper .react-colorful__saturation {
+  height: 119px;
+  border-radius: 8px;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+.custom-picker-wrapper .react-colorful__hue {
+  height: 17px;
+  border-radius: 52px;
+}
+.custom-picker-wrapper .react-colorful__saturation-pointer,
+.custom-picker-wrapper .react-colorful__hue-pointer {
+  width: 28px;
+  height: 28px;
+  border: 1px solid black;
+  background: transparent;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  border-radius: 50%;
+}
+.custom-picker-wrapper .react-colorful__saturation-pointer::after,
+.custom-picker-wrapper .react-colorful__hue-pointer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  width: 26px;
+  height: 26px;
+  background: inherit;
+  background-clip: content-box;
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px #e9e9e9;
+  border: 2px solid white;
+  box-sizing: border-box;
 }
 
 @keyframes sideLabelFadeIn {

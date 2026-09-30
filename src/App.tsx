@@ -1,9 +1,38 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Drawer } from "vaul";
+import { CurvedText } from "./CurvedText";
+import MobileEditSheet, { TextTab } from "./EditSheet";
+import { GraphicEditorBar, MobileEditorBar } from "./EditorBar";
 import EmbroideryPreview, { renderEmbroidery } from "./EmbroideryPreview";
+import { DEFAULT_FONT_FAMILY, MAX_FONT_SIZE, getFontVariants, loadFont } from "./fonts";
+import { TextCurveId, curveIdForPath, invalidateTextMetrics, textCurve } from "./textPath";
+import { drawTextItem, rotatedExtent, textItemFamily, textItemFont, textItemSize } from "./textRender";
 import SizeSelection from "./SizeSelection";
 import { loadDockProducts, EMPTY_DOCK_PRODUCT } from "./catalog";
 import type { DockProduct } from "./catalog";
+
+/**
+ * /scrollversion — the same screen with the checkout sheet laid out inline.
+ *
+ * A layout variant, nothing more: the sheet's content stops being a drawer
+ * pinned to the bottom of the viewport and becomes an ordinary block under the
+ * editor, so the page itself scrolls. Everything inside it is the same markup
+ * the default route renders.
+ *
+ * Read once at module load — the route does not change without a reload. The
+ * positioning it overrides is inline on the elements, so it is expressed as
+ * CSS under `body.scroll-version` in styles.css; this flag only decides the two
+ * things CSS cannot reach, the sheet's "expanded" state and the animation the
+ * editor plays as the sheet rises.
+ */
+export const SCROLL_VERSION =
+  typeof window !== "undefined" &&
+  window.location.pathname.replace(/\/+$/, "") === "/scrollversion";
+
+// What a fresh text says — an untouched placeholder is selected whole when
+// editing starts, so the first keystroke replaces it (main proto behaviour).
+const DEFAULT_TEXT_CONTENT = "Text";
 
 const BASE_PRODUCT_PRICE = 17.98;
 const SURCHARGE_EMBROIDERY = 6;
@@ -13,7 +42,17 @@ const SURCHARGE_STANDARD = 2;
 const HEADER = 56;
 const EDITOR_MIN = 170;
 const THRESHOLD = 10;
-const EDITOR_BOTTOM_OFFSET = 80; // extra bottom padding to shift product upward from center
+// Room the product image leaves free at the stage's top and foot. By default
+// only the foot (the sheet rides over it), which shifts the product upward.
+// Inline the stage is a self-contained card with the Front/Back toolbar on top
+// and the action bar at the foot, so it reserves the same at both ends and the
+// product sits exactly on the card's vertical middle.
+const EDITOR_TOP_OFFSET = SCROLL_VERSION ? 72 : 0;
+const EDITOR_BOTTOM_OFFSET = SCROLL_VERSION ? 72 : 80;
+/** Height of the box the product image is contained in. */
+const productBoxH = (editorH: number) => editorH - EDITOR_TOP_OFFSET - EDITOR_BOTTOM_OFFSET;
+/** Vertical centre of that box, in stage coordinates — the zoom origin. */
+const productCenterY = (editorH: number) => EDITOR_TOP_OFFSET + productBoxH(editorH) / 2;
 
 // Whether a hex colour is light enough that a dark checkmark reads better on it.
 function isLightHex(hex: string): boolean {
@@ -93,6 +132,10 @@ export default function App() {
   const [phase, setPhase] = useState<"idle" | "out" | "in">("idle");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  // Mirrored so the stage's non-passive touch listener can read the zoom
+  // without being torn down and re-attached every time it changes.
+  const zoomRef = useRef(1);
+  zoomRef.current = zoom;
 
 
 
@@ -102,12 +145,48 @@ export default function App() {
   const DRAWER_MIN = 70;
   const [checkoutDrawerHeight, setCheckoutDrawerHeight] = useState(DRAWER_MIN);
   const [checkoutDrawerMaxH, setCheckoutDrawerMaxH] = useState(DRAWER_MIN);
-  const [checkoutDrawerExpanded, setCheckoutDrawerExpanded] = useState(false);
+  const [checkoutDrawerExpandedRaw, setCheckoutDrawerExpanded] = useState(false);
+  // Laid out inline there is nothing to expand — the content is always open,
+  // and every `checkoutDrawerExpanded` below reads true without knowing why.
+  const checkoutDrawerExpanded = SCROLL_VERSION || checkoutDrawerExpandedRaw;
+  /**
+   * Whether a drawer actually opened — which inline it never does.
+   *
+   * Some things on screen exist only as a consequence of the sheet rising: the
+   * view chevrons appear, a blur shade lifts behind the action bar, the bar's
+   * button shrinks to make room. Those read this rather than the state above,
+   * so laid out inline they stay as they are when the sheet is down.
+   *
+   * Pinned false inline rather than just following the raw state: several
+   * things open the sheet as a side effect — dismissing the onboarding popup
+   * does — and inline every one of them would raise chrome for a sheet that
+   * was never there.
+   */
+  const drawerOpen = !SCROLL_VERSION && checkoutDrawerExpandedRaw;
   const [checkoutDrawerDragging, setCheckoutDrawerDragging] = useState(false);
   const [checkoutDrawerContentScrolled, setCheckoutDrawerContentScrolled] = useState(false);
   const [checkoutDrawerScrolledToBottom, setCheckoutDrawerScrolledToBottom] = useState(false);
   const checkoutDrawerRef = useRef<HTMLDivElement>(null);
   const checkoutDrawerScrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * How far the sheet is open, 0 at rest to 1 fully raised. The whole screen
+   * animates off it: the sheet's own header, and the editor above, which
+   * shrinks back to make room.
+   *
+   * Inline, the sheet is simply open — so its own parts read 1 — while the
+   * editor has nothing to make room for and reads 0, keeping its full size.
+   */
+  const drawerInterp = SCROLL_VERSION
+    ? 1
+    : // Guard the first paint, where maxH still equals MIN and 0/0 puts NaN
+      // into every opacity derived from this.
+      checkoutDrawerMaxH <= DRAWER_MIN
+      ? 0
+      : Math.min(
+          1,
+          Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))
+        );
+  const editorInterp = SCROLL_VERSION ? 0 : drawerInterp;
   const otherProductsScrollRef = useRef<HTMLDivElement>(null);
   const [otherProductsScrollPos, setOtherProductsScrollPos] = useState({ atStart: true, atEnd: false });
   const horizontalGesture = useRef({ startX: 0, startY: 0, locked: false });
@@ -136,12 +215,9 @@ export default function App() {
   const [colorDrawerScrolled, setColorDrawerScrolled] = useState(false);
   const [openAccordions, setOpenAccordions] = useState<Set<string>>(new Set());
   const [designDrawerOpen, setDesignDrawerOpen] = useState(false);
-  const [textOptionsDrawerOpen, setTextOptionsDrawerOpen] = useState(false);
   const [graphicsDrawerOpen, setGraphicsDrawerOpen] = useState(false);
   const graphicsScrollRef = useRef<HTMLDivElement>(null);
   const graphicsScrollPos = useRef(0);
-  const textScrollRef = useRef<HTMLDivElement>(null);
-  const textScrollPos = useRef(0);
   const [sizeDrawerOpen, setSizeDrawerOpen] = useState(false);
   const [sideThumbnails, setSideThumbnails] = useState<Array<{ label: string; src: string; thumbnail: string }>>([]);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
@@ -172,8 +248,8 @@ export default function App() {
   const [popupZoom, setPopupZoom] = useState(1);
   const [popupPan, setPopupPan] = useState({ x: 0, y: 0 });
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [printTechnique, setPrintTechnique] = useState<"embroidery" | "standard">("embroidery");
-  const [savedPrintTechnique, setSavedPrintTechnique] = useState<"embroidery" | "standard">("embroidery");
+  const [printTechnique, setPrintTechnique] = useState<"embroidery" | "standard">("standard");
+  const [savedPrintTechnique, setSavedPrintTechnique] = useState<"embroidery" | "standard">("standard");
   const [embroideryDataUrl, setEmbroideryDataUrl] = useState<string | null>(null);
   const [embroideryRenderedUrl, setEmbroideryRenderedUrl] = useState<string | null>(null);
   const [designBbox, setDesignBbox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -200,7 +276,19 @@ export default function App() {
   const canvasEmbEverShownRef = useRef(false);
   const [canvasEmbFirstDelayPassed, setCanvasEmbFirstDelayPassed] = useState(false);
 
-  type DesignItem = { id: string; type: "text" | "image"; content: string; src?: string; x: number; y: number; w: number; fontSize: number; color?: string; };
+  // The main proto's full text model on every item: face, weight, style,
+  // underline, alignment, curve (an SVG baseline path, CE.SDK-style) and
+  // rotation. Legacy fields keep their meaning; text without a fontFamily
+  // falls back to the default face.
+  type DesignItem = {
+    id: string; type: "text" | "image"; content: string; src?: string;
+    x: number; y: number; w: number; fontSize: number;
+    color?: string; colorSet?: boolean;
+    fontFamily?: string; bold?: boolean; italic?: boolean; underline?: boolean;
+    textAlign?: "left" | "center" | "right";
+    textPath?: string | null;
+    rotation?: number;
+  };
   const [allDesignItems, setAllDesignItems] = useState<Record<string, DesignItem[]>>(() => {
     try {
       const saved = localStorage.getItem("designItems");
@@ -218,6 +306,11 @@ export default function App() {
     setAllDesignItems(all => {
       const prev = all[currentSlideLabel] ?? [];
       const next = typeof updater === "function" ? updater(prev) : updater;
+      // Identity-stable: a no-op update must not mint new state — every fresh
+      // identity re-runs the handle-measure layout effect and re-renders the
+      // whole canvas, and a burst of those while a vaul drawer is animating
+      // starves React into "Maximum update depth exceeded".
+      if (next === prev) return all;
       return { ...all, [currentSlideLabel]: next };
     });
   };
@@ -232,6 +325,23 @@ export default function App() {
   const currentPrice = BASE_PRODUCT_PRICE + designSidesCount * (savedPrintTechnique === "embroidery" ? SURCHARGE_EMBROIDERY : SURCHARGE_STANDARD);
 
   const [selectedDesignId, setSelectedDesignId] = useState<string | null>(null);
+  // The text being edited inline (its span swapped for a focused textarea) —
+  // the main proto's editingTextId. Entered through the bar's Write pill,
+  // never on add: on mobile a new text is selected, which is what raises the
+  // editor bar over it, and going straight to the caret would hide the bar
+  // behind the keyboard the instant the text appeared.
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  // Which panel the edit sheet is open at — set by the editor bar's items,
+  // null while the sheet is closed (the main proto's mobileSheetPanel).
+  const [mobileSheetPanel, setMobileSheetPanel] = useState<TextTab | null>(null);
+  // Whether the selected text's font really ships bold / italic faces.
+  const [fontCaps, setFontCaps] = useState({ canBold: true, canItalic: true });
+  // Bumped when a webfont lands, so everything measured re-measures in the
+  // face that is now actually drawing it.
+  const [, setFontTick] = useState(0);
+  // For double-tap detection on text items — a second tap on an already
+  // selected text within this window drops straight into the keyboard.
+  const lastTapRef = useRef<{ id: string; t: number } | null>(null);
   const [designGestureActive, setDesignGestureActive] = useState(false);
   const [snapGuides, setSnapGuides] = useState<{ h: boolean; v: boolean }>({ h: false, v: false });
   const [chevronPressed, setChevronPressed] = useState<"left" | "right" | null>(null);
@@ -279,6 +389,8 @@ export default function App() {
     | { type: "idle" }
     | { type: "move"; itemId: string; startTx: number; startTy: number; startX: number; startY: number; startW: number; startFontSize: number; }
     | { type: "resize-tl" | "resize-tr" | "resize-bl" | "resize-br"; itemId: string; startTx: number; startTy: number; startX: number; startY: number; startW: number; startH: number; startFontSize: number; anchorX: number; anchorY: number; startDist: number; anchorLocalX: number; anchorLocalY: number; }
+    // The proto's rotate handle: angle from the box centre at touchstart vs now.
+    | { type: "rotate"; itemId: string; cx: number; cy: number; startAngle: number; startRotation: number; }
   >({ type: "idle" });
 
 
@@ -425,9 +537,12 @@ export default function App() {
     const prevHtmlOverscroll = document.documentElement.style.overscrollBehavior;
 
     document.body.style.margin = "0";
-    document.body.style.overflow = "hidden";
-    document.body.style.overscrollBehavior = "none";
-    document.documentElement.style.overscrollBehavior = "none";
+    // The page is locked so that only the sheet scrolls. Laid out inline the
+    // page IS the scroller, so the lock has to come off — and it is set here as
+    // an inline style, which no stylesheet could have overridden.
+    document.body.style.overflow = SCROLL_VERSION ? "auto" : "hidden";
+    document.body.style.overscrollBehavior = SCROLL_VERSION ? "auto" : "none";
+    document.documentElement.style.overscrollBehavior = SCROLL_VERSION ? "auto" : "none";
 
     const madeId = "made-outer-sans-font";
     if (!document.getElementById(madeId)) {
@@ -575,7 +690,9 @@ export default function App() {
     if (editorSwipeRef.current.active && e.touches.length === 1) {
       const dy = e.touches[0].clientY - editorSwipeRef.current.startY;
       const dx = e.touches[0].clientX - editorSwipeRef.current.startX;
-      if (dy < -EDITOR_SWIPE_OPEN_DRAWER && Math.abs(dy) > Math.abs(dx)) {
+      // Inline, a swipe up the editor is the page scrolling, not a sheet being
+      // pulled open — there is no sheet to pull.
+      if (!SCROLL_VERSION && dy < -EDITOR_SWIPE_OPEN_DRAWER && Math.abs(dy) > Math.abs(dx)) {
         editorSwipeRef.current.active = false;
         setCheckoutDrawerExpanded(true);
         setCheckoutDrawerHeight(checkoutDrawerMaxH);
@@ -640,11 +757,11 @@ export default function App() {
     const label = slides[activeIndex]?.label;
     const area = label ? selectedProduct.printAreas[label] ?? null : null;
     if (!area) return null;
-    const contentH = editorSize.height - EDITOR_BOTTOM_OFFSET;
+    const contentH = productBoxH(editorSize.height);
     const rect = getContainRect(editorSize.width, contentH, imageNaturalSize.width, imageNaturalSize.height);
     return {
       left: rect.left + rect.width * area.x,
-      top: rect.top + rect.height * area.y,
+      top: EDITOR_TOP_OFFSET + rect.top + rect.height * area.y,
       width: rect.width * area.w,
       height: rect.height * area.h,
     };
@@ -653,6 +770,154 @@ export default function App() {
 
 
   useEffect(() => { currentPARef.current = currentPA; }, [currentPA]);
+
+  /**
+   * The editor bars' two live actions — the same pair the main proto wires
+   * (duplicateSelectedText/Graphic there): clone with a small offset, kept
+   * inside the print area, and delete-and-deselect.
+   */
+  const selectedItem = selectedDesignId
+    ? designItems.find(d => d.id === selectedDesignId) ?? null
+    : null;
+  const duplicateSelectedItem = () => {
+    if (!selectedItem) return;
+    pushHistory();
+    const newId = `${selectedItem.type}-${Date.now()}`;
+    setDesignItems(prev => [...prev, {
+      ...selectedItem,
+      id: newId,
+      x: currentPA ? Math.min(currentPA.width, selectedItem.x + 12) : selectedItem.x + 12,
+      y: currentPA ? Math.min(currentPA.height, selectedItem.y + 12) : selectedItem.y + 12,
+    }]);
+    setSelectedDesignId(newId);
+  };
+  const deleteSelectedItem = () => {
+    if (!selectedDesignId) return;
+    pushHistory();
+    setDesignItems(prev => prev.filter(d => d.id !== selectedDesignId));
+    setSelectedDesignId(null);
+  };
+
+  /** Patch the selected text — the proto's updateSelectedText. */
+  const updateSelectedText = (patch: Partial<DesignItem>) => {
+    if (!selectedDesignId) return;
+    setDesignItems(prev =>
+      prev.map(t => (t.id === selectedDesignId && t.type === "text" ? { ...t, ...patch } : t))
+    );
+  };
+
+  /** Curve on/off — the proto's changeTextCurve, sans its re-fit pass. */
+  const changeTextCurve = (id: TextCurveId | null) => {
+    const patch: Partial<DesignItem> = { textPath: id ? textCurve(id).path : null };
+    // Curved text is always centre-aligned; un-curving leaves alignment be.
+    if (id) patch.textAlign = "center";
+    updateSelectedText(patch);
+  };
+
+  /** Largest size the size slider offers — capped by the print area. */
+  const maxFontSize = currentPA ? Math.min(MAX_FONT_SIZE, currentPA.height) : MAX_FONT_SIZE;
+
+  // Every face the canvas shows gets loaded (Google Fonts, on demand); when
+  // one lands, stale text measurements are dropped and everything measured
+  // re-renders in the real face — the proto's invalidate-and-reapply.
+  const familiesOnCanvas = Object.keys(allDesignItems)
+    .flatMap(k => (allDesignItems[k] as DesignItem[]).filter(d => d.type === "text"))
+    .map(t => textItemFamily(t))
+    .filter((f, i, a) => a.indexOf(f) === i)
+    .join("|");
+  useEffect(() => {
+    const families = familiesOnCanvas ? familiesOnCanvas.split("|") : [];
+    if (!families.includes(DEFAULT_FONT_FAMILY)) families.push(DEFAULT_FONT_FAMILY);
+    let active = true;
+    families.forEach(f =>
+      loadFont(f).then(() => {
+        if (!active) return;
+        invalidateTextMetrics();
+        setFontTick(v => v + 1);
+      })
+    );
+    return () => { active = false; };
+  }, [familiesOnCanvas]);
+
+  // When the selected text's font changes, detect which variants it supports
+  // and drop any bold/italic the new font can't render — the proto's fontCaps
+  // effect, so we never faux-render or strand an un-toggleable style.
+  const selectedFontFamily = selectedItem?.type === "text" ? textItemFamily(selectedItem) : null;
+  useEffect(() => {
+    if (!selectedFontFamily) return;
+    let active = true;
+    const apply = () => {
+      if (!active) return;
+      const v = getFontVariants(selectedFontFamily);
+      // Both writes identity-stable — apply() runs twice (before and after
+      // the font loads) and usually changes nothing.
+      setFontCaps(c =>
+        c.canBold === v.bold && c.canItalic === v.italic
+          ? c
+          : { canBold: v.bold, canItalic: v.italic }
+      );
+      setDesignItems(prev => {
+        let changed = false;
+        const next = prev.map(t => {
+          if (t.type !== "text" || textItemFamily(t) !== selectedFontFamily) return t;
+          if ((t.bold && !v.bold) || (t.italic && !v.italic)) {
+            changed = true;
+            return { ...t, bold: t.bold && v.bold, italic: t.italic && v.italic };
+          }
+          return t;
+        });
+        return changed ? next : prev;
+      });
+    };
+    apply();
+    loadFont(selectedFontFamily).then(() => {
+      invalidateTextMetrics();
+      apply();
+    });
+    return () => { active = false; };
+  }, [selectedFontFamily]);
+
+  // The sheet belongs to a selected text; whatever clears or retypes the
+  // selection closes it.
+  useEffect(() => {
+    if (mobileSheetPanel && selectedItem?.type !== "text") setMobileSheetPanel(null);
+  }, [selectedDesignId, mobileSheetPanel, selectedItem]);
+
+  /**
+   * Inline text editing — the main proto's flow. The selected text's span is
+   * swapped for a focused textarea; a textarea does not size to its content,
+   * so it is measured the way the canvas flattener measures the span.
+   */
+  const textMeasureCtx = useRef<CanvasRenderingContext2D | null>(null);
+  const measureTextBox = (item: DesignItem) => {
+    if (!textMeasureCtx.current)
+      textMeasureCtx.current = document.createElement("canvas").getContext("2d");
+    const ctx = textMeasureCtx.current;
+    const lines = item.content.split("\n");
+    let w = item.fontSize * 0.5; // never collapse to nothing while empty
+    if (ctx) {
+      ctx.font = textItemFont(item);
+      for (const line of lines) w = Math.max(w, ctx.measureText(line).width);
+    }
+    // + the span's own 2px/4px padding on each side, so the glyphs stay put
+    // when the span swaps in and out.
+    return { width: Math.ceil(w) + 8, height: Math.ceil(lines.length * item.fontSize * 0.9) + 4 };
+  };
+  const commitTextEdit = (id: string) => {
+    setEditingTextId(cur => (cur === id ? null : cur));
+    // Editing away everything removes the element — an empty text could never
+    // be seen or reselected.
+    const item = designItems.find(d => d.id === id);
+    if (item && item.type === "text" && item.content.trim() === "") {
+      setDesignItems(prev => prev.filter(d => d.id !== id));
+      if (selectedDesignId === id) setSelectedDesignId(null);
+    }
+  };
+  // Whatever clears or moves the selection (Done, a tap on the stage, a slide
+  // change) also ends the edit — the textarea unmounts without its blur.
+  useEffect(() => {
+    if (editingTextId && selectedDesignId !== editingTextId) commitTextEdit(editingTextId);
+  }, [selectedDesignId]);
 
   const computeHoopframeWarning = () => {
     if (savedPrintTechnique !== "embroidery" || designItems.length === 0) { setHoopframeWarning(false); return; }
@@ -673,6 +938,58 @@ export default function App() {
     }
   }, [previewDrawerOpen]);
 
+  /**
+   * Picking something up on the product brings the stage back into view.
+   *
+   * Inline the page can be scrolled well past the stage, and everything that
+   * appears when a design is selected — its handles, Done, the toolbar — is up
+   * there with it. Smoothly, so it reads as the page following the tap rather
+   * than the ground moving.
+   */
+  useEffect(() => {
+    if (!SCROLL_VERSION || !selectedDesignId) return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [selectedDesignId]);
+
+  /**
+   * Inline, a gesture on the stage is either the page's or the product's —
+   * never both.
+   *
+   * The page is the scroller here, so at rest one finger dragging the stage
+   * scrolls the page, which is wanted. It belongs to the product in two cases:
+   * two fingers, which are a zoom; and one finger while the product is zoomed
+   * in, which is a pan of it. In both the page must hold still underneath, and
+   * back at rest the finger goes back to scrolling.
+   *
+   * touch-action cannot express that. It is read when the gesture begins — by
+   * which time the first finger is already panning the page — and it cannot
+   * depend on the zoom. So the cases are answered directly, on a non-passive
+   * listener: React's own are passive, where a preventDefault is ignored.
+   */
+  useEffect(() => {
+    if (!SCROLL_VERSION) return;
+    const el = editorRef.current;
+    if (!el) return;
+    // Only the second finger is answered on touchstart. Preventing the default
+    // there also cancels the compatibility mouse events the browser synthesises
+    // from a tap — click among them — so doing it for every touch while zoomed
+    // left the buttons on the stage unpressable.
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length >= 2) e.preventDefault();
+    };
+    // Movement is where a page scroll would actually happen, and a tap has
+    // none — so this can be strict without costing a click.
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length >= 2 || zoomRef.current > 1) e.preventDefault();
+    };
+    el.addEventListener("touchstart", onStart, { passive: false });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+    };
+  }, []);
+
   // Non-passive touch listeners on preview image container to block Vaul drag/scroll during gestures
   useEffect(() => {
     const el = previewImgContainerRef.current;
@@ -687,79 +1004,38 @@ export default function App() {
     };
   }, []);
 
-  const TEXT_OPTIONS = [
-    { content: "Love",           color: "#F06292" },
-    { content: "So\ngood",        color: "#FFFFFF", stroke: "#D9D9D9" },
-    { content: "Rise\nup",       color: "#E53935" },
-    { content: "Team\nGreen",    color: "#81C784" },
-    { content: "You\ngot this",   color: "#FFFFF0", stroke: "#D9D9CC" },
-    { content: "Hustle",         color: "#FFA726" },
-    { content: "Let's\ngo",       color: "#F0F8FF", stroke: "#CCD3D9" },
-    { content: "Happy\nbirthday", color: "#E57373" },
-    { content: "Legend",         color: "#FF7043" },
-    { content: "Main\ncharacter", color: "#F5F5F5", stroke: "#D0D0D0" },
-    { content: "Carpe\ndiem",    color: "#7986CB" },
-    { content: "Merry\nXmas",   color: "#FFB74D" },
-    { content: "Vibes\nonly",     color: "#F8F8FF", stroke: "#D3D3E8" },
-    { content: "Squad",          color: "#AB47BC" },
-    { content: "Thank\nyou",     color: "#64B5F6" },
-    { content: "Born\nready",     color: "#F8F8F8", stroke: "#D3D3D3" },
-    { content: "Legends\nonly",  color: "#EF5350" },
-    { content: "Viva la\nvida",  color: "#FFD54F" },
-    { content: "Always\non",      color: "#FAF0E6", stroke: "#D5CCC4" },
-    { content: "Iconic",         color: "#7E57C2" },
-    { content: "Best\nFriend",   color: "#4DB6AC" },
-    { content: "That\ngirl",      color: "#EDEDED", stroke: "#C9C9C9" },
-    { content: "Dance\nwith me", color: "#EF9A9A" },
-    { content: "Brave",          color: "#42A5F5" },
-    { content: "Too\ncool",       color: "#FAFAF0", stroke: "#D5D5CC" },
-    { content: "Free\nHugs",     color: "#BA68C8" },
-    { content: "Dream\nbig",     color: "#43A047" },
-    { content: "Simply\nthe best",color: "#F0F0F0", stroke: "#CCCCCC" },
-    { content: "No\nregrets",    color: "#80DEEA" },
-    { content: "Fearless",       color: "#5C6BC0" },
-    { content: "Look\nat me",    color: "#4DD0E1" },
-    { content: "Made\nwith love",color: "#EC407A" },
-    { content: "Shine\non",      color: "#FFCA28" },
-    { content: "Tabula\nrasa",   color: "#AED581" },
-    { content: "Chill\nout",     color: "#29B6F6" },
-    { content: "Good\nvibes",    color: "#80CBC4" },
-    { content: "Wild\nheart",    color: "#F4511E" },
-    { content: "Keep\ngoing",    color: "#FFAB91" },
-    { content: "Born\nfree",     color: "#9CCC65" },
-    { content: "Stay\nwild",     color: "#CE93D8" },
-    { content: "Do it",          color: "#26C6DA" },
-    { content: "Seize\nthe day", color: "#FF8A65" },
-    { content: "Power",          color: "#E53935" },
-    { content: "Own it",         color: "#66BB6A" },
-    { content: "Glow\nup",       color: "#F48FB1" },
-    { content: "Namaste",        color: "#8D6E63" },
-    { content: "Be\nbold",       color: "#FFF176" },
-    { content: "Fresh",          color: "#26A69A" },
-    { content: "No\nlimits",     color: "#1E88E5" },
-    { content: "Rare",           color: "#EC407A" },
-    { content: "Good\nday",      color: "#D4E157" },
-    { content: "Fly\nhigh",      color: "#FFA000" },
-    { content: "Just\ngo",       color: "#26A69A" },
-    { content: "Cool\nkid",      color: "#00ACC1" },
-    { content: "Mellow",         color: "#A5D6A7" },
-    { content: "Pure\njoy",      color: "#F9A825" },
-    { content: "Classic",        color: "#795548" },
-    { content: "Unbeatable",     color: "#5E35B1" },
-  ] as { content: string; color: string; stroke?: string }[];
-
-  const addTextItem = (content = "Team\nGreen", color = "#3F920C") => {
+  /**
+   * A new text goes straight onto the product — no prepared list. The main
+   * proto's addTextElement: a "Text" placeholder sized so it takes about half
+   * the print area's width (measured in the face it renders in), selected so
+   * the editor bar comes up over it — the bar's Write pill is how you get to
+   * the keyboard from there, same as tapping an existing text.
+   */
+  const addNewTextItem = () => {
     const pa = currentPARef.current;
     if (!pa) return;
     pushHistory();
     const id = `text-${Date.now()}`;
+    let fontSize = 28;
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (ctx) {
+      ctx.font = `100px "${DEFAULT_FONT_FAMILY}"`;
+      const widthAt100 = ctx.measureText(DEFAULT_TEXT_CONTENT).width;
+      if (widthAt100 > 0) {
+        fontSize = Math.max(14, Math.floor(Math.min(((pa.width * 0.5) / widthAt100) * 100, pa.height)));
+      }
+    }
     setDesignItems(prev => [...prev, {
-      id, type: "text" as const, content,
+      id, type: "text" as const, content: DEFAULT_TEXT_CONTENT,
       x: pa.width / 2, y: pa.height / 2,
-      w: 0, fontSize: 28, color,
+      w: 0, fontSize,
+      fontFamily: DEFAULT_FONT_FAMILY,
+      // Reads against the product until a colour is picked; colorSet keeps
+      // the bar's Color item on the rainbow wheel meanwhile.
+      color: isLightHex(selectedColor) ? "#111111" : "#FFFFFF",
+      colorSet: false,
     }]);
     setSelectedDesignId(id);
-    setTextOptionsDrawerOpen(false);
     setDesignDrawerOpen(false);
     requestAnimationFrame(() => setHandleTick(v => v + 1));
   };
@@ -795,32 +1071,27 @@ export default function App() {
       let pending = imageItems.length;
 
       const proceed = () => {
-        const mctx = document.createElement("canvas").getContext("2d")!;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
         for (const item of designItems) {
+          // Unrotated box first, then the axis-aligned extent of it rotated —
+          // so a tilted item's bbox still wraps every glyph and pixel.
+          let boxW: number, boxH: number;
           if (item.type === "image") {
             const img = loadedImgs.get(item.src ?? "");
             const aspect = img && img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
-            const iH = item.w / aspect;
-            minX = Math.min(minX, item.x - item.w / 2);
-            minY = Math.min(minY, item.y - iH / 2);
-            maxX = Math.max(maxX, item.x + item.w / 2);
-            maxY = Math.max(maxY, item.y + iH / 2);
+            boxW = item.w;
+            boxH = item.w / aspect;
           } else {
-            mctx.font = `400 ${item.fontSize}px "CarterOne", cursive`;
-            const lines = item.content.split("\n");
-            const lineH = item.fontSize * 0.9;
-            const m0 = mctx.measureText(lines[0] || "M");
-            const ascent = m0.actualBoundingBoxAscent;
-            const descent = m0.actualBoundingBoxDescent;
-            const totalH = (lines.length - 1) * lineH + ascent + descent;
-            const halfW = Math.max(...lines.map(l => mctx.measureText(l).width)) / 2;
-            minX = Math.min(minX, item.x - halfW);
-            minY = Math.min(minY, item.y - totalH / 2);
-            maxX = Math.max(maxX, item.x + halfW);
-            maxY = Math.max(maxY, item.y + totalH / 2);
+            const s = textItemSize(item);
+            boxW = s.w;
+            boxH = s.h;
           }
+          const ext = rotatedExtent(boxW, boxH, item.rotation);
+          minX = Math.min(minX, item.x - ext.w / 2);
+          minY = Math.min(minY, item.y - ext.h / 2);
+          maxX = Math.max(maxX, item.x + ext.w / 2);
+          maxY = Math.max(maxY, item.y + ext.h / 2);
         }
 
         if (!isFinite(minX)) { resolve({ dataUrl: "", bbox: null }); return; }
@@ -855,24 +1126,14 @@ export default function App() {
             const aspect = img.naturalWidth / img.naturalHeight;
             const drawW = item.w;
             const drawH = item.w / aspect;
-            ctx.drawImage(img, item.x - drawW / 2, item.y - drawH / 2, drawW, drawH);
+            ctx.save();
+            ctx.translate(item.x, item.y);
+            if (item.rotation) ctx.rotate((item.rotation * Math.PI) / 180);
+            ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+            ctx.restore();
             renderNext(index + 1);
           } else if (item.type === "text") {
-            ctx.save();
-            ctx.font = `400 ${item.fontSize}px "CarterOne", cursive`;
-            ctx.fillStyle = item.color ?? "#3F920C";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "alphabetic";
-            const lines = item.content.split("\n");
-            const lineH = item.fontSize * 0.9;
-            const m0 = ctx.measureText(lines[0] || "M");
-            const ascent = m0.actualBoundingBoxAscent;
-            const totalH = (lines.length - 1) * lineH + m0.actualBoundingBoxAscent + m0.actualBoundingBoxDescent;
-            const topY = item.y - totalH / 2;
-            lines.forEach((line, i) => {
-              ctx.fillText(line, item.x, topY + ascent + i * lineH);
-            });
-            ctx.restore();
+            drawTextItem(ctx, item, item.x, item.y);
             renderNext(index + 1);
           } else {
             renderNext(index + 1);
@@ -1025,7 +1286,7 @@ export default function App() {
           return;
         }
 
-        const editorRect = getContainRect(editorSize.width, editorSize.height - EDITOR_BOTTOM_OFFSET, imageNaturalSize.width || imgW, imageNaturalSize.height || imgH);
+        const editorRect = getContainRect(editorSize.width, productBoxH(editorSize.height), imageNaturalSize.width || imgW, imageNaturalSize.height || imgH);
         const scale = canvasRect.width / editorRect.width;
         const paLeft = canvasRect.left + canvasRect.width * frontArea.x;
         const paTop = canvasRect.top + canvasRect.height * frontArea.y;
@@ -1051,22 +1312,13 @@ export default function App() {
               const boxSize = item.w * scale;
               const drawW = aspect >= 1 ? boxSize : boxSize * aspect;
               const drawH = aspect >= 1 ? boxSize / aspect : boxSize;
-              pctx.drawImage(el, item.x * scale - drawW / 2, item.y * scale - drawH / 2, drawW, drawH);
-            } else if (item.type === "text") {
               pctx.save();
-              const fontSize = item.fontSize * scale;
-              pctx.font = `400 ${fontSize}px "CarterOne", cursive`;
-              pctx.fillStyle = item.color ?? "#3F920C";
-              pctx.textAlign = "center";
-              pctx.textBaseline = "alphabetic";
-              const lines = item.content.split("\n");
-              const lineH = fontSize * 0.9;
-              const m0 = pctx.measureText(lines[0] || "M");
-              const ascent = m0.actualBoundingBoxAscent;
-              const totalH_t = (lines.length - 1) * lineH + ascent + m0.actualBoundingBoxDescent;
-              const topY = item.y * scale - totalH_t / 2;
-              lines.forEach((line, li) => pctx.fillText(line, item.x * scale, topY + ascent + li * lineH));
+              pctx.translate(item.x * scale, item.y * scale);
+              if (item.rotation) pctx.rotate((item.rotation * Math.PI) / 180);
+              pctx.drawImage(el, -drawW / 2, -drawH / 2, drawW, drawH);
               pctx.restore();
+            } else if (item.type === "text") {
+              drawTextItem(pctx, { ...item, fontSize: item.fontSize * scale }, item.x * scale, item.y * scale);
             }
           }
 
@@ -1149,7 +1401,7 @@ export default function App() {
         const canvasRect = getContainRect(OUTPUT, OUTPUT, imgW, imgH);
         ctx.drawImage(img, canvasRect.left, canvasRect.top, canvasRect.width, canvasRect.height);
         if (items.length === 0 || !printArea) { resolve(canvas.toDataURL("image/png")); return; }
-        const editorRect = getContainRect(editorSize.width, editorSize.height - EDITOR_BOTTOM_OFFSET, imageNaturalSize.width || imgW, imageNaturalSize.height || imgH);
+        const editorRect = getContainRect(editorSize.width, productBoxH(editorSize.height), imageNaturalSize.width || imgW, imageNaturalSize.height || imgH);
         const scale = canvasRect.width / editorRect.width;
         const paLeft = canvasRect.left + canvasRect.width * printArea.x;
         const paTop = canvasRect.top + canvasRect.height * printArea.y;
@@ -1170,21 +1422,13 @@ export default function App() {
               const boxSize = item.w * scale;
               const drawW = aspect >= 1 ? boxSize : boxSize * aspect;
               const drawH = aspect >= 1 ? boxSize / aspect : boxSize;
-              pctx.drawImage(el, item.x * scale - drawW / 2, item.y * scale - drawH / 2, drawW, drawH);
-            } else if (item.type === "text") {
               pctx.save();
-              const fontSize = item.fontSize * scale;
-              pctx.font = `400 ${fontSize}px "CarterOne", cursive`;
-              pctx.fillStyle = item.color ?? "#3F920C";
-              pctx.textAlign = "center";
-              pctx.textBaseline = "alphabetic";
-              const lines = item.content.split("\n");
-              const lineH = fontSize * 0.9;
-              const m0 = pctx.measureText(lines[0] || "M");
-              const ascent = m0.actualBoundingBoxAscent;
-              const topY = item.y * scale - (((lines.length - 1) * lineH + ascent + m0.actualBoundingBoxDescent)) / 2;
-              lines.forEach((line, li) => pctx.fillText(line, item.x * scale, topY + ascent + li * lineH));
+              pctx.translate(item.x * scale, item.y * scale);
+              if (item.rotation) pctx.rotate((item.rotation * Math.PI) / 180);
+              pctx.drawImage(el, -drawW / 2, -drawH / 2, drawW, drawH);
               pctx.restore();
+            } else if (item.type === "text") {
+              drawTextItem(pctx, { ...item, fontSize: item.fontSize * scale }, item.x * scale, item.y * scale);
             }
           }
           ctx.drawImage(paCanvas, paLeft, paTop);
@@ -1235,6 +1479,19 @@ export default function App() {
     const g = designGestureRef.current;
     if (g.type === "idle") return;
     e.preventDefault();
+    if (g.type === "rotate") {
+      // Screen-space angle from the box centre — the proto's startRotate math.
+      const angle =
+        (Math.atan2(e.touches[0].clientY - g.cy, e.touches[0].clientX - g.cx) * 180) / Math.PI;
+      let next = g.startRotation + angle - g.startAngle;
+      // Snap to the compass points within a few degrees, so straight is easy.
+      const snapped = Math.round(next / 90) * 90;
+      if (Math.abs(next - snapped) < 4) next = snapped;
+      setDesignItems(items =>
+        items.map(item => (item.id === g.itemId ? { ...item, rotation: ((next % 360) + 360) % 360 } : item))
+      );
+      return;
+    }
     const dx = (e.touches[0].clientX - g.startTx) / zoom;
     const dy = (e.touches[0].clientY - g.startTy) / zoom;
     const pa = currentPARef.current;
@@ -1361,16 +1618,6 @@ export default function App() {
   }, [graphicsDrawerOpen]);
 
   useEffect(() => {
-    if (textOptionsDrawerOpen) {
-      requestAnimationFrame(() => {
-        if (textScrollRef.current) {
-          textScrollRef.current.scrollTop = textScrollPos.current;
-        }
-      });
-    }
-  }, [textOptionsDrawerOpen]);
-
-  useEffect(() => {
     const el = popupImgRef.current;
     if (!el || !modelPopupOpen) return;
     const onStart = (e: TouchEvent) => {
@@ -1409,8 +1656,120 @@ export default function App() {
     return () => { el.removeEventListener("touchstart", onStart); el.removeEventListener("touchmove", onMove); el.removeEventListener("touchend", onEnd); };
   }, [modelPopupOpen]);
 
+  /**
+   * The bottom action bar.
+   *
+   * Fixed above the sheet by default. Laid out inline it goes in the flow
+   * instead — at the end of the grey editor area, above the sheet — so it
+   * scrolls away with the page rather than riding over the content. That is why
+   * it is a value: the same markup, rendered in one of two places.
+   */
+  /**
+   * After a product is picked lower down (the "other products" rail, or the
+   * All-products drawer), glide back up to it. Inline the page itself is the
+   * scroller; by default it is the sheet's own. `delay` lets a closing drawer
+   * finish first — vaul pins the page while it is open, and a scroll started
+   * under it is lost.
+   */
+  const scrollBackToProduct = (delay = 50) => {
+    setTimeout(() => {
+      if (SCROLL_VERSION) window.scrollTo({ top: 0, behavior: "smooth" });
+      else checkoutDrawerScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }, delay);
+  };
+
+  /** Total pieces picked across all sizes. */
+  const totalSelectedQty = Object.keys(quantities).reduce((a: number, k: string) => a + (quantities[k] ?? 0), 0);
+
+  /**
+   * Put the current configuration in the cart — shared by the size sheet's
+   * own CTA and the black cart button in the checkout sheet.
+   */
+  const addCurrentToCart = async () => {
+    const thumbnail = await generateCartThumbnail();
+    setCartItems(prev => [...prev, {
+      product: selectedProduct.name,
+      color: selectedColor,
+      colorLabel: selectedProduct.colors.find(c => c.key === selectedColor)?.label ?? selectedColor,
+      thumbnail,
+      quantities: { ...quantities },
+      unitPrice: currentPrice,
+      printTechnique: savedPrintTechnique,
+    }]);
+    setCartCount(c => c + totalSelectedQty);
+    setQuantities({});
+    setCheckoutDrawerExpanded(false);
+    setCheckoutDrawerHeight(DRAWER_MIN);
+    setTimeout(() => {
+      setToastVisible(true);
+      setTimeout(() => setToastVisible(false), 2500);
+    }, 400);
+  };
+
+  const actionBar = (
+    <>
+        <div id="action-bar" data-app-actionbar style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId || (showPopup && !hasAnyItems) ? 0 : 1, pointerEvents: selectedDesignId || (showPopup && !hasAnyItems) ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
+
+          {/* Change product button — shown only when ck-drawer is at MAX */}
+          {/* <div style={{ position: "absolute", inset: 0, zIndex: 17, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(60px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: checkoutDrawerExpanded ? "opacity 0s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.25s" : "opacity 0.15s ease 0s, transform 0.15s ease 0s" }}>
+            <button
+              type="button"
+              onClick={() => setAllProductsDrawerOpen(true)}
+              style={{ height: 46, padding: "0 24px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", fontSize: 14, fontWeight: 600, cursor: "pointer", boxShadow: "0 1px 5px rgba(0,0,0,0.06)" }}
+            >
+              Change this product
+            </button>
+          </div> */}
+
+          {/* Action bar buttons */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", padding: "0 16px" }}>
+            <div style={{ padding: 1, borderRadius: 999, background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)" }}>
+              <button
+                type="button"
+                className="action-bar-btn"
+                onClick={() => {
+                  // The wait is for the sheet: it drops out of the way first,
+                  // and the design drawer comes up once it has. Inline the
+                  // sheet is page content with nowhere to drop to, and
+                  // checkoutDrawerExpanded is pinned true — so the button
+                  // always took the slow path, half a second of nothing
+                  // happening before the drawer appeared.
+                  if (!SCROLL_VERSION && checkoutDrawerExpanded) {
+                    setCheckoutDrawerExpanded(false);
+                    setCheckoutDrawerHeight(DRAWER_MIN);
+                    setTimeout(() => setDesignDrawerOpen(true), 500);
+                  } else {
+                    setDesignDrawerOpen(true);
+                  }
+                }}
+                style={{ height: drawerOpen ? 38 : 46, padding: drawerOpen ? "0 14px" : "0 18px", borderRadius: 999, border: "none",
+                  // A faint wash of the border's own red → blue → green over
+                  // the grey, so the pill reads a touch more colourful.
+                  background: "linear-gradient(90deg, rgba(220,38,38,0.02) 0%, rgba(77,82,210,0.02) 50%, rgba(22,163,74,0.02) 100%), rgba(244,244,244,0.95)",
+                  color: "#111", display: "flex", alignItems: "center", gap: drawerOpen ? 6 : 8, fontSize: drawerOpen ? 13 : 14, fontWeight: 600, cursor: "pointer", transition: "height 0.25s ease, font-size 0.25s ease" }}
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="plusGradient" x1="0" y1="10" x2="20" y2="10" gradientUnits="userSpaceOnUse">
+                      <stop offset="-0.88%" stopColor="#DC2626" />
+                      <stop offset="49.94%" stopColor="#4D52D2" />
+                      <stop offset="101.36%" stopColor="#16A34A" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M10 4v12M4 10h12" stroke="url(#plusGradient)" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span>Add design/text</span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+    </>
+  );
+
   return (
     <div
+      data-app-root
       style={{
         height: "100dvh",
         position: "relative",
@@ -1419,15 +1778,20 @@ export default function App() {
         overflowX: "hidden",
         overflowY: "clip",
         fontFamily: '"Inter Variable", sans-serif',
-        background: "linear-gradient(300deg, #f2f2f2 0%, #e3e3e3 100%)",
+        // The canvas grey: the current mid-grey at the top, a hair darker at
+        // the foot. Shared with the inline card in styles.css (--canvas-bg).
+        background: "var(--canvas-bg)",
         overscrollBehavior: "none",
         touchAction: "manipulation",
       }}
     >
       {/* Page content — blurred when design menu is open */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+      <div data-app-page style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
       {/* Orange banner */}
-      <div style={{ background: "#E8502A", color: "#fff", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, height: 36, flexShrink: 0, position: "relative", zIndex: 20 }}>
+      {/* Grows up by the status bar's inset (non-zero only where the page is
+          drawn under it, e.g. home-screen mode), so the orange runs behind
+          the status bar and the label keeps its 36px row below it. */}
+      <div style={{ background: "#E8502A", color: "#fff", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, height: "calc(36px + env(safe-area-inset-top, 0px))", paddingTop: "env(safe-area-inset-top, 0px)", boxSizing: "border-box", flexShrink: 0, position: "relative", zIndex: 20 }}>
         Winter Sale 20%
         <img src="/icons/icon-chevrons-right.svg" alt="" style={{ width: 16, height: 16, filter: "invert(1)" }} />
       </div>
@@ -1437,6 +1801,10 @@ export default function App() {
         <img src="/icons/Logo.svg" alt="Spreadshirt" style={{ height: 22, objectFit: "contain" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
 
+          {/* Wishlist — visual only for now. */}
+          <button type="button" aria-label="Wishlist" style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex" }}>
+            <img src="/icons/icon-heart.svg" alt="" style={{ width: 24, height: 24 }} />
+          </button>
           <button type="button" onClick={() => setCartDrawerOpen(true)} style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex", position: "relative" }}>
             <img src="/icons/icon-cart.svg" alt="Cart" style={{ width: 24, height: 24 }} />
             {cartCount > 0 && (
@@ -1455,6 +1823,13 @@ export default function App() {
 
       {/* Editor */}
       <div
+        data-app-editor
+        // Zoomed in, the stage stops handing vertical movement to the page: one
+        // finger is panning the product. touch-action is read at the start of
+        // each touch sequence, and lifting off after a pinch ends one — so by
+        // the time the finger comes back down to pan, this is in force. Back at
+        // 1 it lifts and the finger scrolls the page again.
+        data-zoomed={SCROLL_VERSION && zoom > 1 ? "" : undefined}
         ref={editorRef}
         onTouchStart={onEditorTouchStart}
         onTouchMove={onEditorTouchMove}
@@ -1470,7 +1845,7 @@ export default function App() {
           touchAction: "none",
         }}
       >
-        <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", overflow: "clip", transform: `translateY(${-30 * Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))}px) scale(${1 - 0.38 * Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))})`, transformOrigin: "center top", transition: checkoutDrawerDragging ? "none" : "transform 0.7s cubic-bezier(0.16,1,0.3,1)" }}>
+        <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", overflow: "clip", transform: `translateY(${-30 * editorInterp}px) scale(${1 - 0.38 * editorInterp})`, transformOrigin: "center top", transition: checkoutDrawerDragging ? "none" : "transform 0.7s cubic-bezier(0.16,1,0.3,1)" }}>
           {slides.map((slide: { label: string; src: string }, slideIdx: number) => {
             const isActive = slideIdx === activeIndex;
             const isTarget = targetIndex !== null && slideIdx === targetIndex;
@@ -1503,7 +1878,7 @@ export default function App() {
                 alt={slide.label}
                 draggable={false}
                 style={{
-                  position: "absolute", top: 0, left: 0, width: "100%", height: `calc(100% - ${EDITOR_BOTTOM_OFFSET}px)`,
+                  position: "absolute", top: EDITOR_TOP_OFFSET, left: 0, width: "100%", height: `calc(100% - ${EDITOR_TOP_OFFSET + EDITOR_BOTTOM_OFFSET}px)`,
                   objectFit: "contain", transformOrigin: "center center",
                   opacity, visibility,
                   transform: `${transform} translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
@@ -1532,7 +1907,7 @@ export default function App() {
                 opacity: phase === "out" ? 0 : (!activeIsEmpty && (selectedDesignId || designGestureActive)) ? 1 : 0,
                 transition: "opacity 180ms ease-in-out",
                 transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
-                transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${(editorSize.height - EDITOR_BOTTOM_OFFSET) / 2 - currentPA.top}px`,
+                transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${productCenterY(editorSize.height) - currentPA.top}px`,
               }} />
 
               {/* Snap guide lines */}
@@ -1544,7 +1919,7 @@ export default function App() {
                   pointerEvents: "none",
                   zIndex: 17,
                   transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
-                  transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${(editorSize.height - EDITOR_BOTTOM_OFFSET) / 2 - currentPA.top}px`,
+                  transformOrigin: `${editorSize.width / 2 - currentPA.left}px ${productCenterY(editorSize.height) - currentPA.top}px`,
                 }}>
                   {snapGuides.h && (
                     <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "#FF3B30", transform: "translateY(-50%)" }} />
@@ -1560,8 +1935,13 @@ export default function App() {
                 position: "absolute",
                 left: 0, top: 0, width: "100%", height: "100%",
                 pointerEvents: "none",
-                transform: `translate3d(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px, 0) scale(${zoom})`,
-                transformOrigin: `${editorSize.width / 2}px ${(editorSize.height - EDITOR_BOTTOM_OFFSET) / 2}px`,
+                // 2D, not translate3d: a 3D transform makes this its own GPU
+                // layer, which Safari rasterises once at zoom 1 and then just
+                // magnifies — the handles, their icons and the text all went
+                // soft when zoomed. A 2D transform is re-rasterised at the
+                // zoom it lands on, so everything stays sharp.
+                transform: `translate(${zoom <= 1 ? 0 : pan.x}px, ${zoom <= 1 ? 0 : pan.y}px) scale(${zoom})`,
+                transformOrigin: `${editorSize.width / 2}px ${productCenterY(editorSize.height)}px`,
                 zIndex: designGestureActive ? 16 : 6,
                 opacity: phase === "out" ? 0 : 1,
                 transition: "opacity 180ms ease-in-out",
@@ -1578,10 +1958,11 @@ export default function App() {
                         left: currentPA.left + item.x,
                         top: currentPA.top + item.y,
                         width: "fit-content",
-                        transform: "translate(-50%, -50%)",
+                        transform: `translate(-50%, -50%) rotate(${item.rotation ?? 0}deg)`,
                         pointerEvents: "all",
                         touchAction: "none",
-                        outline: isSelected ? `${1.5 / zoom}px solid #4D52D2` : `${1.5 / zoom}px solid transparent`,
+                        // The main proto's selection frame: a 1px #3355FF ring.
+                        boxShadow: isSelected ? `0 0 0 ${1 / zoom}px #3355FF` : "none",
                         borderRadius: 0,
                         boxSizing: "border-box",
                         overflow: "visible",
@@ -1590,6 +1971,25 @@ export default function App() {
                       }}
                       onTouchStart={(e) => {
                         e.stopPropagation();
+                        // While its textarea is up the box is not draggable —
+                        // a touch here is about the caret, not a move.
+                        if (item.id === editingTextId) return;
+                        // A second tap on an already selected text goes
+                        // straight to the keyboard — same focus-inside-the-tap
+                        // sequence as the Write pill.
+                        const now = Date.now();
+                        const lastTap = lastTapRef.current;
+                        lastTapRef.current = { id: item.id, t: now };
+                        if (
+                          item.type === "text" &&
+                          isSelected &&
+                          lastTap && lastTap.id === item.id && now - lastTap.t < 350
+                        ) {
+                          flushSync(() => setMobileSheetPanel(null));
+                          flushSync(() => setEditingTextId(item.id));
+                          document.querySelector<HTMLTextAreaElement>("[data-text-edit]")?.focus();
+                          return;
+                        }
                         // Bring to front + select on the first tap.
                         setSelectedDesignId(item.id);
                         setDesignItems(prev => {
@@ -1619,61 +2019,143 @@ export default function App() {
                     >
                       {item.type === "image" ? (
                         <img src={item.src} alt="" draggable={false} style={{ display: "block", width: item.w, height: item.w, objectFit: "contain", userSelect: "none", WebkitUserSelect: "none", opacity: hideFlatForEmb ? 0 : 1 }} />
+                      ) : item.id === editingTextId ? (
+                        (() => {
+                          // A curved text keeps its glyphs on the path while
+                          // edited (as in CE.SDK): the CurvedText render stays
+                          // underneath and the textarea turns invisible on
+                          // top, purely catching keys.
+                          const curved = !!item.textPath;
+                          const box = curved
+                            ? (() => { const s = textItemSize(item); return { width: s.w, height: s.h }; })()
+                            : measureTextBox(item);
+                          return (
+                            <div style={{ position: "relative", width: box.width, height: box.height }}>
+                            {curved && (
+                              <span aria-hidden style={{ position: "absolute", inset: 0, display: "block", pointerEvents: "none" }}>
+                                <CurvedText
+                                  text={item.content}
+                                  path={item.textPath!}
+                                  fontSize={item.fontSize}
+                                  fontFamily={textItemFamily(item)}
+                                  color={item.color ?? "#000"}
+                                  bold={item.bold}
+                                  italic={item.italic}
+                                  underline={item.underline}
+                                  showPath
+                                />
+                              </span>
+                            )}
+                            <textarea
+                              data-text-edit="true"
+                              value={item.content}
+                              rows={1}
+                              onChange={e => {
+                                const v = e.target.value;
+                                setDesignItems(prev => prev.map(t => (t.id === item.id ? { ...t, content: v } : t)));
+                              }}
+                              onBlur={() => commitTextEdit(item.id)}
+                              onKeyDown={e => { if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur(); }}
+                              // The stage would deselect, the item would start a
+                              // move — a touch in the text is the caret's alone.
+                              onTouchStart={e => e.stopPropagation()}
+                              onTouchMove={e => e.stopPropagation()}
+                              onTouchEnd={e => e.stopPropagation()}
+                              ref={node => {
+                                if (!node || node.dataset.initialSelectDone === "1") return;
+                                // Explicit focus, not just autoFocus: on iOS the
+                                // keyboard only opens for a focus() inside the tap
+                                // that asked for it (paired with the flushSync in
+                                // the Write handler).
+                                node.focus();
+                                // An untouched placeholder is selected whole, so
+                                // the first keystroke replaces it; written text
+                                // gets a caret at its end instead.
+                                const untouched = node.value === DEFAULT_TEXT_CONTENT;
+                                node.setSelectionRange(untouched ? 0 : node.value.length, node.value.length);
+                                node.dataset.initialSelectDone = "1";
+                              }}
+                              style={{
+                                position: "absolute",
+                                inset: 0,
+                                display: "block",
+                                width: box.width,
+                                height: box.height,
+                                fontSize: item.fontSize,
+                                fontFamily: `"${textItemFamily(item)}"`,
+                                fontWeight: item.bold ? 700 : 400,
+                                fontStyle: item.italic ? "italic" : "normal",
+                                textDecoration: item.underline ? "underline" : "none",
+                                // While curved, the textarea is only a key
+                                // sink: the glyphs underneath are the
+                                // CurvedText, so its own are hidden.
+                                color: curved ? "transparent" : item.color ?? "#000",
+                                caretColor: curved ? "transparent" : item.color ?? "#000",
+                                lineHeight: 0.9,
+                                textAlign: item.textAlign ?? "center",
+                                whiteSpace: "pre",
+                                padding: curved ? 0 : "2px 4px",
+                                margin: 0,
+                                border: "none",
+                                outline: "none",
+                                background: "transparent",
+                                resize: "none",
+                                overflow: "hidden",
+                                // styles.css turns selection off app-wide; the
+                                // one place it must work is here.
+                                userSelect: "text",
+                                WebkitUserSelect: "text",
+                              }}
+                            />
+                            </div>
+                          );
+                        })()
+                      ) : item.textPath ? (
+                        <CurvedText
+                          text={item.content}
+                          path={item.textPath}
+                          fontSize={item.fontSize}
+                          fontFamily={textItemFamily(item)}
+                          color={hideFlatForEmb ? "transparent" : item.color ?? "#000"}
+                          bold={item.bold}
+                          italic={item.italic}
+                          underline={item.underline}
+                        />
                       ) : (
                         <span style={{
                           display: "block",
                           fontSize: item.fontSize,
-                          fontFamily: '"CarterOne", cursive',
-                          fontWeight: 400,
-                          color: hideFlatForEmb ? "transparent" : (item.color ?? "#3F920C"),
+                          fontFamily: `"${textItemFamily(item)}"`,
+                          fontWeight: item.bold ? 700 : 400,
+                          fontStyle: item.italic ? "italic" : "normal",
+                          textDecoration: item.underline ? "underline" : "none",
+                          color: hideFlatForEmb ? "transparent" : (item.color ?? "#000"),
                           lineHeight: 0.9,
                           whiteSpace: "pre-line",
                           userSelect: "none",
                           WebkitUserSelect: "none",
                           padding: "2px 4px",
-                          textAlign: "center",
+                          textAlign: item.textAlign ?? "center",
                         }}>{item.content}</span>
                       )}
-                      {isSelected && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: -(32 + 8) / zoom,
-                            left: "50%",
-                            transform: `translateX(-50%) scale(${1 / zoom})`,
-                            transformOrigin: "center bottom",
-                            width: 32, height: 32, borderRadius: 999,
-                            background: "#fff",
-                            boxShadow: "0 1px 6px rgba(0,0,0,0.18)",
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            touchAction: "none", zIndex: 2, cursor: "pointer",
-                          }}
-                          onTouchEnd={(e) => {
-                            e.stopPropagation();
-                            pushHistory();
-                            setDesignItems(prev => prev.filter(d => d.id !== item.id));
-                            setSelectedDesignId(null);
-                          }}
-                        >
-                          <img src="/icons/icon-trash.svg" width={16} height={16} alt="Delete" style={{ opacity: 0.6 }} />
-                        </div>
-                      )}
-                      {isSelected && (["tl", "tr", "bl", "br"] as const).map(corner => {
+                      {/* Delete moved off the item into the editor bar above
+                          the canvas, like the main proto — no floating trash
+                          bubble riding over the design. */}
+                      {isSelected && item.id !== editingTextId && (["tl", "tr", "bl", "br"] as const).map(corner => {
                         const gtype = `resize-${corner}` as "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
-                        const HANDLE = 12;
+                        // The proto's resize nub: a 15px white circle with a
+                        // 2px #3355FF border.
+                        const HANDLE = 15;
                         const HIT = 44;
-                        const measured = itemSizeRefs.current.get(item.id);
-                        // Images: item.w is always current in state, no measurement needed.
-                        // Text: use measured DOM size.
-                        const iW = item.type === "image" ? item.w : (measured?.w ?? 60);
-                        const iH = item.type === "image" ? item.w : (measured?.h ?? 60);
                         // Handles are children of the item container; absolute positioning is
                         // relative to the container's top-left (0,0), not the CSS transform origin.
+                        // In percent of the container itself, not a measured size, so a
+                        // corner can never lag behind the box it belongs to.
                         const cornerPos: React.CSSProperties = corner === "tl"
                           ? { top: 0, left: 0 }
-                          : corner === "tr" ? { top: 0, left: iW }
-                          : corner === "bl" ? { top: iH, left: 0 }
-                          : { top: iH, left: iW };
+                          : corner === "tr" ? { top: 0, left: "100%" }
+                          : corner === "bl" ? { top: "100%", left: 0 }
+                          : { top: "100%", left: "100%" };
                         // Bias each hit zone outward from the corner (instead of
                         // centring on it) so it barely overlaps the object body —
                         // that keeps the interior free for moving, while the corner
@@ -1690,7 +2172,11 @@ export default function App() {
                             width: HIT, height: HIT,
                             touchAction: "none", zIndex: 3,
                             transform: `translate(${tx}, ${ty}) scale(${1 / zoom})`,
-                            transformOrigin: "center center",
+                            // Scale about the nub — the point that sits on the
+                            // corner — so the counter-zoom shrinks the hit box
+                            // around it and the nub stays on the corner at any
+                            // zoom. About the box centre it drifted off.
+                            transformOrigin: `${nubLeft} ${nubTop}`,
                             ...cornerPos,
                           }}
                             onTouchStart={(e) => {
@@ -1737,13 +2223,145 @@ export default function App() {
                               left: nubLeft, top: nubTop,
                               transform: "translate(-50%, -50%)",
                               width: HANDLE, height: HANDLE, borderRadius: 999,
-                              background: "#fff", border: "2px solid #4D52D2",
-                              boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+                              background: "#fff", border: "2px solid #3355FF",
+                              boxSizing: "border-box",
                               flexShrink: 0, pointerEvents: "none",
                             }} />
                           </div>
                         );
                       })}
+
+                      {/* The proto's selection chrome around the frame: the
+                          trashcan above it, and the rotate + move discs 20px
+                          below it — all scaled back by 1/zoom so they hold
+                          their screen size while the canvas is zoomed. */}
+                      {isSelected && item.id !== editingTextId && (() => {
+                        const disc: React.CSSProperties = {
+                          display: "flex",
+                          width: 26, height: 26,
+                          alignItems: "center", justifyContent: "center",
+                          borderRadius: 999,
+                          border: "2px solid #3355FF",
+                          background: "#fff", color: "#3355FF",
+                          boxSizing: "border-box",
+                          touchAction: "none", cursor: "pointer",
+                        };
+                        return (
+                          <>
+                            {/* create-omat's trashcan button above the selection. */}
+                            <div
+                              role="button"
+                              aria-label="Delete object"
+                              onTouchStart={e => e.stopPropagation()}
+                              onTouchEnd={e => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                pushHistory();
+                                setDesignItems(prev => prev.filter(d => d.id !== item.id));
+                                setSelectedDesignId(null);
+                              }}
+                              style={{
+                                position: "absolute",
+                                // Anchored by its BOTTOM edge, 12 screen px above
+                                // the frame, and scaled about that same edge — so
+                                // it stays standing on the frame at any zoom. Set
+                                // by `top`, the unscaled height leaked in and it
+                                // sank into the text as the canvas zoomed.
+                                bottom: `calc(100% + ${12 / zoom}px)`,
+                                left: "50%",
+                                transform: `translateX(-50%) scale(${1 / zoom})`,
+                                transformOrigin: "center bottom",
+                                width: 28, height: 28, borderRadius: 999,
+                                border: "2px solid #d01c00",
+                                background: "#f4f4f4", color: "#d01c00",
+                                boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                boxSizing: "border-box",
+                                touchAction: "none", cursor: "pointer", zIndex: 4,
+                              }}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M3 6h18" />
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                <line x1="10" y1="11" x2="10" y2="17" />
+                                <line x1="14" y1="11" x2="14" y2="17" />
+                              </svg>
+                            </div>
+
+                            {/* Rotate + move, 20px below the frame, 12px apart. */}
+                            <div
+                              style={{
+                                position: "absolute",
+                                // Off the frame's real foot, not a measured height.
+                                top: `calc(100% + ${20 / zoom}px)`,
+                                left: "50%",
+                                transform: `translateX(-50%) scale(${1 / zoom})`,
+                                transformOrigin: "center top",
+                                display: "flex", gap: 12, zIndex: 4,
+                              }}
+                            >
+                              <div
+                                role="button"
+                                aria-label="Rotate"
+                                style={disc}
+                                onTouchStart={e => {
+                                  e.stopPropagation();
+                                  pushHistory();
+                                  const el = itemElRefs.current.get(item.id);
+                                  const rect = el?.getBoundingClientRect();
+                                  if (!rect) return;
+                                  const cx = rect.left + rect.width / 2;
+                                  const cy = rect.top + rect.height / 2;
+                                  const t = e.touches[0];
+                                  designGestureRef.current = {
+                                    type: "rotate",
+                                    itemId: item.id,
+                                    cx, cy,
+                                    startAngle: (Math.atan2(t.clientY - cy, t.clientX - cx) * 180) / Math.PI,
+                                    startRotation: item.rotation ?? 0,
+                                  };
+                                  setDesignGestureActive(true);
+                                }}
+                              >
+                                {/* Two-arrow circular glyph, as the engine draws it. */}
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                                  <path d="M21 3v5h-5" />
+                                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                                  <path d="M3 21v-5h5" />
+                                </svg>
+                              </div>
+                              <div
+                                role="button"
+                                aria-label="Move"
+                                style={disc}
+                                onTouchStart={e => {
+                                  e.stopPropagation();
+                                  pushHistory();
+                                  const t = e.touches[0];
+                                  designGestureRef.current = {
+                                    type: "move",
+                                    itemId: item.id,
+                                    startTx: t.clientX,
+                                    startTy: t.clientY,
+                                    startX: item.x,
+                                    startY: item.y,
+                                    startW: item.w,
+                                    startFontSize: item.fontSize,
+                                  };
+                                  setDesignGestureActive(true);
+                                }}
+                              >
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M12 2v20M2 12h20" />
+                                  <path d="m9 5 3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3" />
+                                </svg>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   );
                 })}
@@ -1845,7 +2463,7 @@ export default function App() {
               onTouchStart={e => { e.stopPropagation(); setChevronPressed("left"); }}
               onTouchEnd={e => { e.stopPropagation(); setChevronPressed(null); if (activeIndex > 0) goToSlide(activeIndex - 1); }}
               onTouchCancel={() => setChevronPressed(null)}
-              style={{ position: "absolute", left: -6, top: (editorSize.height - checkoutDrawerHeight) / 2, transform: "translateY(-50%)", zIndex: 25, width: 72, height: 72, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? (activeIndex === 0 ? 0.3 : 1) : 0, pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: "opacity 0.25s ease, top 0.7s cubic-bezier(0.16,1,0.3,1)" }}
+              style={{ position: "absolute", left: -6, top: (editorSize.height - checkoutDrawerHeight) / 2, transform: "translateY(-50%)", zIndex: 25, width: 72, height: 72, display: "flex", alignItems: "center", justifyContent: "center", opacity: drawerOpen ? (activeIndex === 0 ? 0.3 : 1) : 0, pointerEvents: drawerOpen ? "auto" : "none", transition: "opacity 0.25s ease, top 0.7s cubic-bezier(0.16,1,0.3,1)" }}
             >
               <div style={{ width: 36, height: 36, borderRadius: 999, background: chevronPressed === "left" ? "rgba(220,220,220,0.95)" : "rgba(255,255,255,0.85)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 6px rgba(0,0,0,0.12)", transition: "background 0.1s ease" }}>
                 <img src="/icons/icon-chevron-left.svg" width={18} height={18} alt="Previous" />
@@ -1855,7 +2473,7 @@ export default function App() {
               onTouchStart={e => { e.stopPropagation(); setChevronPressed("right"); }}
               onTouchEnd={e => { e.stopPropagation(); setChevronPressed(null); if (activeIndex < slides.length - 1) goToSlide(activeIndex + 1); }}
               onTouchCancel={() => setChevronPressed(null)}
-              style={{ position: "absolute", right: -6, top: (editorSize.height - checkoutDrawerHeight) / 2, transform: "translateY(-50%)", zIndex: 25, width: 72, height: 72, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? (activeIndex === slides.length - 1 ? 0.3 : 1) : 0, pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: "opacity 0.25s ease, top 0.7s cubic-bezier(0.16,1,0.3,1)" }}
+              style={{ position: "absolute", right: -6, top: (editorSize.height - checkoutDrawerHeight) / 2, transform: "translateY(-50%)", zIndex: 25, width: 72, height: 72, display: "flex", alignItems: "center", justifyContent: "center", opacity: drawerOpen ? (activeIndex === slides.length - 1 ? 0.3 : 1) : 0, pointerEvents: drawerOpen ? "auto" : "none", transition: "opacity 0.25s ease, top 0.7s cubic-bezier(0.16,1,0.3,1)" }}
             >
               <div style={{ width: 36, height: 36, borderRadius: 999, background: chevronPressed === "right" ? "rgba(220,220,220,0.95)" : "rgba(255,255,255,0.85)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 6px rgba(0,0,0,0.12)", transition: "background 0.1s ease" }}>
                 <img src="/icons/icon-chevron-right.svg" width={18} height={18} alt="Next" />
@@ -1865,7 +2483,10 @@ export default function App() {
         )}
 
         {/* Editor toolbar */}
-        <div style={{ position: "absolute", top: 12, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", zIndex: 10, opacity: checkoutDrawerExpanded ? 0 : 1, pointerEvents: checkoutDrawerExpanded ? "none" : "auto", transition: "opacity 0.25s ease" }}>
+        {/* Hidden while the sheet is raised over it — which inline it never
+            is: there checkoutDrawerExpanded is pinned true, so it must not
+            decide this, or the toolbar would never show. */}
+        <div style={{ position: "absolute", top: 12, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", zIndex: 10, opacity: !SCROLL_VERSION && checkoutDrawerExpanded ? 0 : 1, pointerEvents: !SCROLL_VERSION && checkoutDrawerExpanded ? "none" : "auto", transition: "opacity 0.25s ease" }}>
           <div style={{ display: "flex", gap: 4 }} />
           <button type="button" onClick={async () => { setSlidePopoverOpen(v => !v); const results = await Promise.all(slides.map(s => generateSideThumbnail(s.label, s.src))); setSideThumbnails(slides.map((s, i) => ({ label: s.label, src: s.src, thumbnail: results[i] }))); }} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
             <span>{slides[activeIndex]?.label ?? "Front"}</span>
@@ -1876,64 +2497,131 @@ export default function App() {
           </button>
         </div>
 
+        {/* Objects editor bars — the main proto's floating pill at the top of
+            the canvas, one bar per selection type in the same shell: text gets
+            the mobile text bar, artwork the design bar. Duplicate and delete
+            are the live actions; the rest render like the proto's unwired
+            items. Same mount for the default route and /scrollversion — the
+            stage is the positioning context in both. */}
+        <GraphicEditorBar
+          show={selectedItem?.type === "image"}
+          onDuplicate={duplicateSelectedItem}
+          onDelete={deleteSelectedItem}
+        />
+        <MobileEditorBar
+          show={selectedItem?.type === "text" && !editingTextId && !mobileSheetPanel}
+          color={selectedItem?.color ?? "#000"}
+          colorSet={selectedItem?.colorSet !== false}
+          onWrite={() => {
+            if (!selectedItem || selectedItem.type !== "text") return;
+            // The proto's sequence: commit the textarea into the document
+            // synchronously, still inside the tap — iOS only raises the
+            // keyboard for a focus() inside the gesture that asked for it.
+            flushSync(() => setMobileSheetPanel(null));
+            flushSync(() => setEditingTextId(selectedItem.id));
+            document.querySelector<HTMLTextAreaElement>("[data-text-edit]")?.focus();
+          }}
+          // Tapping an item opens the bottom sheet, at that panel — the sheet
+          // never appears on its own (the proto's flow).
+          onPanel={panel => setMobileSheetPanel(panel)}
+          onDuplicate={duplicateSelectedItem}
+          onDelete={deleteSelectedItem}
+        />
+
+        {/* Selection controls — undo/redo at the canvas's bottom-left, the
+            main proto's black "Done ✓" pill at its bottom-right, 12px off the
+            stage edges like the editor bar. Undo/redo are visual only for now. */}
+        <div
+          onTouchStart={e => e.stopPropagation()}
+          onTouchMove={e => e.stopPropagation()}
+          onTouchEnd={e => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            left: 12,
+            right: 12,
+            // Default route: the stage runs to the screen's foot, so clear
+            // the home indicator too. Inline the stage is a card mid-page.
+            bottom: SCROLL_VERSION ? 12 : "calc(12px + env(safe-area-inset-bottom))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            zIndex: 20,
+            opacity: selectedDesignId ? 1 : 0,
+            transform: selectedDesignId ? "translateY(0)" : "translateY(16px)",
+            pointerEvents: selectedDesignId ? "auto" : "none",
+            transition: "opacity 0.2s ease, transform 0.2s ease",
+          }}
+        >
+          {/* Same 48px white pill as the editor bar, two icon items in it. */}
+          <div style={{ display: "flex", height: 48, boxSizing: "border-box", alignItems: "center", gap: 2, padding: 6, borderRadius: 999, background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.10)" }}>
+            <button type="button" aria-label="Undo" className="eb-item" style={{ width: 36, justifyContent: "center", padding: 0, borderRadius: 999 }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M9.70711 13.2929C10.0676 13.6534 10.0953 14.2206 9.7903 14.6129L9.70711 14.7071C9.34662 15.0676 8.77939 15.0953 8.3871 14.7903L8.29289 14.7071L4.29289 10.7071C4.2575 10.6717 4.22531 10.6343 4.19633 10.5953L4.12467 10.4841L4.07123 10.3713L4.03585 10.266L4.01102 10.1485L4.00398 10.0898L4 10L4.00279 9.92476L4.02024 9.79927L4.04974 9.68786L4.09367 9.57678L4.146 9.47929L4.2097 9.3871L4.29289 9.29289L8.29289 5.29289C8.68342 4.90237 9.31658 4.90237 9.70711 5.29289C10.0676 5.65338 10.0953 6.22061 9.7903 6.6129L9.70711 6.70711L7.415 9H16C18.7614 9 21 11.2386 21 14C21 16.6888 18.8777 18.8818 16.2169 18.9954L16 19H15C14.4477 19 14 18.5523 14 18C14 17.4872 14.386 17.0645 14.8834 17.0067L15 17H16C17.6569 17 19 15.6569 19 14C19 12.4023 17.7511 11.0963 16.1763 11.0051L16 11H7.415L9.70711 13.2929Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </button>
+            <button type="button" aria-label="Redo" className="eb-item" style={{ width: 36, justifyContent: "center", padding: 0, borderRadius: 999 }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M10 19H9C6.23 19 4 16.7618 4 14.0039C4 11.2361 6.23 9.00785 9 9.00785H17.59L15.29 6.71965V6.71865C14.89 6.31896 14.89 5.68946 15.29 5.29976C15.68 4.90008 16.31 4.90008 16.71 5.29976L20.71 9.29662V9.29563C20.8 9.38555 20.87 9.49547 20.92 9.62537C20.97 9.74527 20.99 9.86518 21 10.0051C20.99 10.135 20.97 10.2549 20.92 10.3848C20.87 10.5047 20.8 10.6146 20.71 10.7145L16.71 14.7114C16.31 15.1011 15.68 15.1011 15.29 14.7114C14.89 14.3117 14.89 13.6822 15.289 13.2925L17.589 11.0043H8.99C7.33 11.0043 5.99 12.3432 5.99 14.0019C5.99 15.6506 7.33 16.9996 8.99 16.9996H9.99C10.54 16.9996 10.99 17.4392 10.99 17.9988C10.99 18.5484 10.54 18.998 9.99 18.998L10 19Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </button>
+          </div>
+
+          {/* The main proto's Done pill (create-omat's DockUnselectButton). */}
+          <button
+            ref={doneBtnRef}
+            type="button"
+            onClick={() => setSelectedDesignId(null)}
+            style={{
+              display: "inline-flex",
+              minHeight: 40,
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              borderRadius: 24,
+              border: "none",
+              background: "#000",
+              padding: "12px 16px",
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#fff",
+              cursor: "pointer",
+              fontFamily: '"Inter Variable", sans-serif',
+              boxShadow: "0px 2px 4px 0px #25211F0D",
+            }}
+          >
+            Done
+            <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M19.2929 6.29289C19.6834 5.90237 20.3166 5.90237 20.7071 6.29289C21.0676 6.65338 21.0953 7.22061 20.7903 7.6129L20.7071 7.70711L10.7071 17.7071C10.3466 18.0676 9.77939 18.0953 9.3871 17.7903L9.29289 17.7071L4.29289 12.7071C3.90237 12.3166 3.90237 11.6834 4.29289 11.2929C4.65338 10.9324 5.22061 10.9047 5.6129 11.2097L5.70711 11.2929L10 15.585L19.2929 6.29289Z"
+                fill="currentColor"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {/* Inline, the action bar belongs to the stage — inside it, so the grey
+            is one rounded card rather than two blocks that have to be made to
+            look like one. Pinned to the card's foot by styles.css. */}
+        {SCROLL_VERSION && actionBar}
       </div>
 
 
 
 
-      {/* Done button — visible when a design object is selected */}
-      <div style={{
-        position: "absolute", bottom: 0, left: 0, right: 0,
-        padding: "12px 16px 28px",
-        display: "flex", justifyContent: "space-between",
-        opacity: selectedDesignId ? 1 : 0,
-        pointerEvents: selectedDesignId ? "auto" : "none",
-        transition: "opacity 0.18s ease",
-        zIndex: 3,
-      }}>
-        <button
-          type="button"
-          onTouchStart={(e) => { e.stopPropagation(); }}
-          onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); undo(); }}
-          onClick={undo}
-          style={{
-            height: 52, borderRadius: 999, padding: "0 20px",
-            border: "none", background: "#fff",
-            boxShadow: "0 1px 6px rgba(0,0,0,0.08)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 8, fontSize: 15, fontWeight: 600, color: "#111", cursor: "pointer",
-            fontFamily: '"Inter Variable", sans-serif',
-          }}
-        >
-          <img src="/icons/icon-arrow-return-back.svg" alt="Undo" style={{ width: 18, height: 18 }} />
-          Undo
-        </button>
-        <button
-          ref={doneBtnRef}
-          type="button"
-          className="done-btn"
-          onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); setSelectedDesignId(null); }}
-          style={{
-            width: "50%", height: 52, borderRadius: 999,
-            border: "none", background: "#fff",
-            boxShadow: "0 1px 6px rgba(0,0,0,0.08)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 8, fontSize: 16, fontWeight: 700, color: "#111", cursor: "pointer",
-            fontFamily: '"Inter Variable", sans-serif',
-          }}
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M4 10.5L8.5 15L16 6" stroke="#111" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          Done
-        </button>
-      </div>
 
       {/* Blur overlay — behind ck-drawer and action bar, grows as drawer opens */}
       {(() => {
-        const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+        const interp = drawerInterp;
         return (
-          <div style={{
+          <div data-ck-veil style={{
             position: "fixed",
             inset: 0,
             zIndex: 17,
@@ -1949,6 +2637,19 @@ export default function App() {
 
       {/* Checkout drawer — overlays editor, sits below action bar */}
       <div
+        data-ck-drawer
+        // Fixed, a hidden sheet costs no room; in the flow it would leave its
+        // full height as a hole. Marked so the inline layout can take it out.
+        //
+        // Only for the onboarding, though. The sheet also fades while a design
+        // is selected — so that it does not cover the canvas — but inline it
+        // covers nothing, it is simply below. Taking it out of the flow there
+        // would collapse the page under the reader and snap them to the top.
+        data-ck-hidden={
+          (SCROLL_VERSION ? showPopup && !hasAnyItems : selectedDesignId || (showPopup && !hasAnyItems))
+            ? ""
+            : undefined
+        }
         ref={checkoutDrawerRef}
         style={{
           position: "fixed",
@@ -1989,10 +2690,11 @@ export default function App() {
         )}
         {/* Drag handle */}
         <div
+          data-ck-grip
           onMouseDown={onCheckoutDrawerHandleMouseDown}
-          onTouchStart={e => { checkoutDrawerStart(e.touches[0].clientY); }}
-          onTouchMove={e => { e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
-          onTouchEnd={e => { checkoutDrawerEnd(e.changedTouches[0].clientY); }}
+          onTouchStart={e => { if (SCROLL_VERSION) return; checkoutDrawerStart(e.touches[0].clientY); }}
+          onTouchMove={e => { if (SCROLL_VERSION) return; e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
+          onTouchEnd={e => { if (SCROLL_VERSION) return; checkoutDrawerEnd(e.changedTouches[0].clientY); }}
           style={{ height: 20, touchAction: "none", display: "flex", justifyContent: "center", alignItems: "center", cursor: "grab", flexShrink: 0 }}
         >
           <svg ref={checkoutDrawerHandleSvgRef} width="36" height="8" viewBox="0 0 36 4" style={{ overflow: "visible" }}>
@@ -2002,29 +2704,60 @@ export default function App() {
 
         {/* Header row with toggle button — sticky above scroll */}
         <div
-          onTouchStart={e => { checkoutDrawerStart(e.touches[0].clientY); }}
-          onTouchMove={e => { e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
-          onTouchEnd={e => { checkoutDrawerEnd(e.changedTouches[0].clientY); }}
+          data-ck-header
+          onTouchStart={e => { if (SCROLL_VERSION) return; checkoutDrawerStart(e.touches[0].clientY); }}
+          onTouchMove={e => { if (SCROLL_VERSION) return; e.preventDefault(); checkoutDrawerMove(e.touches[0].clientY); }}
+          onTouchEnd={e => { if (SCROLL_VERSION) return; checkoutDrawerEnd(e.changedTouches[0].clientY); }}
           style={{ display: "flex", alignItems: "center", padding: checkoutDrawerExpanded ? "0 20px 12px" : "0 16px", gap: 0, flexShrink: 0, touchAction: "none", boxShadow: checkoutDrawerExpanded && checkoutDrawerContentScrolled ? "0 2px 6px rgba(0,0,0,0.06)" : "none", transition: "box-shadow 0.3s ease, padding 0.3s ease" }}>
-            <h2 style={{
+            <h2 data-ck-title style={{
               margin: 0,
               fontFamily: "MADEOuterSans, sans-serif",
               fontSize: 14, lineHeight: 1.4, fontWeight: 500, letterSpacing: "-0.02em", color: "#000",
-              opacity: 0.4 + Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))) * 0.4,
+              opacity: 0.4 + drawerInterp * 0.4,
               flex: 1, overflow: "hidden", marginLeft: checkoutDrawerExpanded ? 0 : 4,
               whiteSpace: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "nowrap" : "normal",
               textOverflow: "clip",
-              maxHeight: `${19.6 + Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))) * 19.6}px`,
+              maxHeight: `${19.6 + drawerInterp * 19.6}px`,
               WebkitMaskImage: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "linear-gradient(to right, black 80%, transparent 100%)" : "none",
               maskImage: checkoutDrawerHeight <= DRAWER_MIN + 5 ? "linear-gradient(to right, black 80%, transparent 100%)" : "none",
             }}>
               {selectedProduct.name}
             </h2>
-            <div style={{
+            {/* Inline there is nothing to close, so the price takes the
+                toggle's place — and the one under the colour line goes, rather
+                than being said twice. */}
+            {SCROLL_VERSION && (
+              <div
+                style={{
+                  marginLeft: 12,
+                  flexShrink: 0,
+                  fontSize: 22,
+                  fontWeight: 700,
+                  color: "#111",
+                  whiteSpace: "nowrap",
+                  // The title's own line box. Left at its natural height the
+                  // price makes the row taller than the title, and the colour
+                  // label below it then sits that much further down than the
+                  // gap it was given.
+                  lineHeight: "19.6px",
+                }}
+              >
+                {currentPrice.toFixed(2).replace(".", ",") + " €"}
+              </div>
+            )}
+            {/* Second row of the left column, under the title — see the grid in
+                styles.css. It is the same line that sits under the price on the
+                default layout, moved up here and hidden there. */}
+            {SCROLL_VERSION && (
+              <div style={{ fontSize: 14, color: "#6a6a6a" }}>
+                Color: {selectedProduct.colors.find(c => c.key === selectedColor)?.label}
+              </div>
+            )}
+            <div data-ck-cartpill style={{
               display: "flex", alignItems: "center", gap: 8, overflow: "hidden", flexShrink: 0,
-              maxWidth: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 200}px`,
-              marginLeft: `${(1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)))) * 8}px`,
-              opacity: 1 - Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))),
+              maxWidth: `${(1 - drawerInterp) * 200}px`,
+              marginLeft: `${(1 - drawerInterp) * 8}px`,
+              opacity: 1 - drawerInterp,
               transition: "max-width 0.3s ease, margin-left 0.3s ease, opacity 0.3s ease",
             }}>
               <span style={{ fontSize: 14, fontWeight: 700, color: "#6A6A6A", flexShrink: 0, background: "#E3E3E3", borderRadius: 9999, padding: "6px 10px", display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -2034,6 +2767,7 @@ export default function App() {
             </div>
             <button
               type="button"
+              data-ck-toggle
               onClick={() => {
                 const next = !checkoutDrawerExpanded;
                 setCheckoutDrawerExpanded(next);
@@ -2056,15 +2790,16 @@ export default function App() {
 
         {/* Scrollable content */}
         <div
+          data-ck-scroll
           ref={checkoutDrawerScrollRef}
           onScroll={e => {
             const el = e.currentTarget as HTMLDivElement;
             setCheckoutDrawerContentScrolled(el.scrollTop > 0);
             setCheckoutDrawerScrolledToBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - 4);
           }}
-          onTouchStart={onCheckoutDrawerScrollTouchStart}
-          onTouchMove={onCheckoutDrawerScrollTouchMove}
-          onTouchEnd={onCheckoutDrawerScrollTouchEnd}
+          onTouchStart={SCROLL_VERSION ? undefined : onCheckoutDrawerScrollTouchStart}
+          onTouchMove={SCROLL_VERSION ? undefined : onCheckoutDrawerScrollTouchMove}
+          onTouchEnd={SCROLL_VERSION ? undefined : onCheckoutDrawerScrollTouchEnd}
           style={{
             flex: 1,
             overflowY: checkoutDrawerExpanded ? "auto" : "hidden",
@@ -2077,24 +2812,65 @@ export default function App() {
         >
           {/* Price + color label */}
           {(() => {
-            const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+            const interp = drawerInterp;
             return (
-              <div style={{ opacity: interp, overflow: "hidden", maxHeight: `${interp * 80}px`, transition: "opacity 0.3s ease, max-height 0.3s ease" }}>
+              <div data-ck-meta style={{ opacity: interp, overflow: "hidden", maxHeight: `${interp * 80}px`, transition: "opacity 0.3s ease, max-height 0.3s ease" }}>
                 <div style={{ paddingLeft: 20, marginTop: 0, marginBottom: 16 }}>
                   <div style={{ fontSize: 14, color: "#6a6a6a", marginBottom: 10 }}>
                     Color: {selectedProduct.colors.find(c => c.key === selectedColor)?.label}
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginBottom: 2 }}>
+                  <div data-ck-bigprice style={{ fontSize: 22, fontWeight: 700, color: "#111", marginBottom: 2 }}>
                     {currentPrice.toFixed(2).replace(".", ",") + " €"}
                   </div>
-                  <div style={{ fontSize: 14, color: "#6a6a6a" }}>Plus shipping</div>
+                  <div data-ck-shipping style={{ fontSize: 14, color: "#6a6a6a" }}>Plus shipping</div>
                 </div>
               </div>
             );
           })()}
-          {(() => { const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN))); return (
-          <div onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} style={{ display: "flex", overflowX: "auto", gap: 4, padding: "0 16px", marginBottom: 14, marginTop: `${8 - interp * 8}px`, scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x", transition: checkoutDrawerDragging ? "none" : "margin-top 0.3s ease" }}>
-            {selectedProduct.colors.map(({ key, label, hex }) => (
+          {(() => { const interp = drawerInterp; return (
+          <div onTouchStart={onHorizontalTouchStart} onTouchMove={onHorizontalTouchMove} onTouchEnd={onHorizontalTouchEnd} style={{ display: "flex", overflowX: "auto",
+            // Inline the tiles butt up against each other, and the row starts
+            // on the header's 20px edge — so the selected tile's frame lines
+            // up with the title above instead of sticking out past it.
+            gap: SCROLL_VERSION ? 0 : 4, padding: SCROLL_VERSION ? "0 20px" : "0 16px", marginBottom: 14, marginTop: `${8 - interp * 8}px`, scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x", transition: checkoutDrawerDragging ? "none" : "margin-top 0.3s ease" }}>
+            {selectedProduct.colors.map(({ key, label, hex }) =>
+              /* Inline, the colours are the product in that colour rather than
+                 a disc of it — create-omat's desktop swatch: a 50px tile, the
+                 thumbnail contained inside it, and the chosen one framed. */
+              SCROLL_VERSION ? (
+                <button
+                  key={key}
+                  type="button"
+                  aria-label={label}
+                  onClick={() => setSelectedColor(key)}
+                  style={{
+                    flexShrink: 0,
+                    width: 50,
+                    height: 50,
+                    padding: 6,
+                    boxSizing: "border-box",
+                    borderRadius: 8,
+                    border: `1px solid ${key === selectedColor ? "#000" : "transparent"}`,
+                    background: key === selectedColor ? "#fff" : "transparent",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    overflow: "hidden",
+                    cursor: "pointer",
+                  }}
+                >
+                  <img
+                    src={selectedProduct.thumbnail(key)}
+                    alt={label}
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: "100%",
+                      objectFit: "contain",
+                      display: "block",
+                    }}
+                  />
+                </button>
+              ) : (
                 <button
                   key={key}
                   type="button"
@@ -2118,13 +2894,14 @@ export default function App() {
                     )}
                   </div>
                 </button>
-            ))}
+              )
+            )}
           </div>
           ); })()}
 
           {/* Available sizes + CTA buttons — fade in as ck-drawer expands */}
           {(() => {
-            const interp = Math.min(1, Math.max(0, (checkoutDrawerHeight - DRAWER_MIN) / (checkoutDrawerMaxH - DRAWER_MIN)));
+            const interp = drawerInterp;
             const oos = selectedProduct.outOfStock[selectedColor] ?? [];
             return (
               <div>
@@ -2144,14 +2921,72 @@ export default function App() {
                     </button>
                     </div>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setSizeDrawerOpen(true)}
-                    style={{ width: "100%", height: 54, borderRadius: 0, border: "none", background: "#000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, fontSize: 14, fontWeight: 600, cursor: "pointer", marginBottom: 10 }}
-                  >
-                    <img src="/icons/icon-cart.svg" alt="" style={{ width: 20, height: 20, filter: "invert(1)" }} />
-                    <span>Select size</span>
-                  </button>
+                  {/* The main proto's desktop selector row (its basket-hypotheses
+                      layout): a bordered "Select size & quantity" trigger that
+                      flexes, and beside it the black cart-plus button. Icon only
+                      until sizes are picked; then it grows to reveal "Add to
+                      basket" + a green count, via the 0fr → 1fr grid-track trick. */}
+                  <div style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSizeDrawerOpen(true)}
+                      style={{
+                        // 54px, not the proto's 48: a thumb-sized row on mobile,
+                        // level with the Print technique box above it.
+                        display: "inline-flex", minWidth: 0, flex: 1, height: 54,
+                        alignItems: "center", justifyContent: "space-between", gap: 12,
+                        padding: "0 12px", border: "2px solid #3C3C3C", borderRadius: 0,
+                        background: "transparent", color: "#000", cursor: "pointer",
+                        fontFamily: '"Inter Variable", sans-serif', fontSize: 14, fontWeight: 600,
+                      }}
+                    >
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        Select size &amp; quantity
+                      </span>
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+                        <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Add to basket"
+                      // Nothing chosen yet: the tap goes to the size picker,
+                      // since there is nothing to add.
+                      onClick={() => (totalSelectedQty > 0 ? addCurrentToCart() : setSizeDrawerOpen(true))}
+                      className="cart-cta"
+                      style={{
+                        display: "flex", height: 54, flexShrink: 0,
+                        alignItems: "center", justifyContent: "center",
+                        padding: "0 16px", border: "none", borderRadius: 0,
+                        background: "#000", color: "#fff", cursor: "pointer",
+                        fontFamily: '"Inter Variable", sans-serif',
+                      }}
+                    >
+                      {/* Shopping Cart Plus — the proto's glyph, on currentColor. */}
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+                        <path
+                          d="M6 2C6.51284 2 6.9354 2.38645 6.99316 2.88379L7 3V4.06836L12.0762 4.43164C12.6269 4.47101 13.0421 4.94927 13.0029 5.5C12.9664 6.01143 12.5509 6.40544 12.0508 6.42773L11.9336 6.42676L7 6.07324V12H18.1328L18.1533 11.8604C18.2261 11.3527 18.6684 10.9886 19.1689 11.002L19.2852 11.0117C19.7926 11.0846 20.1559 11.527 20.1426 12.0273L20.1328 12.1436L19.9902 13.1416C19.9251 13.5962 19.5602 13.9425 19.1133 13.9932L19 14H7V16H17C18.6569 16 20 17.3431 20 19C20 20.6569 18.6569 22 17 22C15.3431 22 14 20.6569 14 19C14 18.649 14.0631 18.3131 14.1738 18H8.82617C8.93694 18.3131 9 18.649 9 19C9 20.6569 7.65685 22 6 22C4.34315 22 3 20.6569 3 19C3 17.6941 3.83532 16.5859 5 16.1738V4H4C3.48716 4 3.0646 3.61355 3.00684 3.11621L3 3C3 2.48716 3.38645 2.0646 3.88379 2.00684L4 2H6ZM6 18C5.44772 18 5 18.4477 5 19C5 19.5523 5.44772 20 6 20C6.55228 20 7 19.5523 7 19C7 18.4477 6.55228 18 6 18ZM17 18C16.4477 18 16 18.4477 16 19C16 19.5523 16.4477 20 17 20C17.5523 20 18 19.5523 18 19C18 18.4477 17.5523 18 17 18ZM18 2C18.5128 2 18.9354 2.38645 18.9932 2.88379L19 3V5H21C21.5523 5 22 5.44772 22 6C22 6.51284 21.6135 6.9354 21.1162 6.99316L21 7H19V9C19 9.55228 18.5523 10 18 10C17.4872 10 17.0646 9.61355 17.0068 9.11621L17 9V7H15C14.4477 7 14 6.55228 14 6C14 5.48716 14.3865 5.0646 14.8838 5.00684L15 5H17V3C17 2.44772 17.4477 2 18 2Z"
+                          fill="currentColor"
+                        />
+                      </svg>
+                      <span
+                        aria-hidden={totalSelectedQty === 0}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: totalSelectedQty > 0 ? "1fr" : "0fr",
+                          transition: "grid-template-columns 0.3s cubic-bezier(0.34,1.56,0.64,1)",
+                        }}
+                      >
+                        <span style={{ display: "flex", minWidth: 0, alignItems: "center", overflow: "hidden", whiteSpace: "nowrap", opacity: totalSelectedQty > 0 ? 1 : 0, transition: "opacity 0.2s" }}>
+                          <span style={{ paddingLeft: 12, fontSize: 14, fontWeight: 600 }}>Add to basket</span>
+                          {/* #007D38 — the header cart badge's green in the proto. */}
+                          <span style={{ marginLeft: 12, display: "flex", height: 24, minWidth: 24, boxSizing: "border-box", flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 999, background: "#007D38", padding: "0 6px", fontSize: 14, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                            {totalSelectedQty}
+                          </span>
+                        </span>
+                      </span>
+                    </button>
+                  </div>
                   {oos.length > 0 && (
                     <div style={{ fontSize: 15, color: "#6a6a6a", opacity: interp }}>
                       {oos.slice(0, -1).join(", ")}{oos.length > 1 ? " and " : ""}{oos[oos.length - 1]} out of stock
@@ -2288,7 +3123,7 @@ export default function App() {
                             setSelectedColor(p.defaultColor);
                             setIndex(0);
                             setActiveIndex(0);
-                            setTimeout(() => { if (checkoutDrawerScrollRef.current) checkoutDrawerScrollRef.current.scrollTo({ top: 0, behavior: "smooth" }); }, 50);
+                            scrollBackToProduct();
                           }}
                           style={{ flexShrink: 0, width: 130, background: "none", border: "none", borderRadius: 0, overflow: "visible", cursor: "pointer", textAlign: "left", padding: 0 }}
                         >
@@ -2319,7 +3154,7 @@ export default function App() {
           })()}
         </div>{/* end scrollable content */}
         {/* Bottom fade — visible only when collapsed */}
-        <div style={{
+        <div data-ck-fade style={{
           position: "absolute",
           bottom: 0,
           left: 0,
@@ -2344,58 +3179,12 @@ export default function App() {
         WebkitBackdropFilter: "blur(25px)",
         maskImage: "linear-gradient(to bottom, transparent, black)",
         WebkitMaskImage: "linear-gradient(to bottom, transparent, black)",
-        opacity: checkoutDrawerExpanded ? 1 : 0,
+        opacity: drawerOpen ? 1 : 0,
         pointerEvents: "none",
         transition: checkoutDrawerDragging ? "none" : "opacity 0.7s cubic-bezier(0.16,1,0.3,1), bottom 0.7s cubic-bezier(0.16,1,0.3,1)",
       }} />
 
-      {/* Bottom action bar */}
-      <div id="action-bar" style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId || (showPopup && !hasAnyItems) ? 0 : 1, pointerEvents: selectedDesignId || (showPopup && !hasAnyItems) ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
-
-        {/* Change product button — shown only when ck-drawer is at MAX */}
-        {/* <div style={{ position: "absolute", inset: 0, zIndex: 17, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(60px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: checkoutDrawerExpanded ? "opacity 0s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.25s" : "opacity 0.15s ease 0s, transform 0.15s ease 0s" }}>
-          <button
-            type="button"
-            onClick={() => setAllProductsDrawerOpen(true)}
-            style={{ height: 46, padding: "0 24px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#111", fontSize: 14, fontWeight: 600, cursor: "pointer", boxShadow: "0 1px 5px rgba(0,0,0,0.06)" }}
-          >
-            Change this product
-          </button>
-        </div> */}
-
-        {/* Action bar buttons */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", padding: "0 16px" }}>
-          <div style={{ padding: 1, borderRadius: 999, background: "linear-gradient(90deg, #DC2626 -0.88%, #4D52D2 49.94%, #16A34A 101.36%)" }}>
-            <button
-              type="button"
-              className="action-bar-btn"
-              onClick={() => {
-                if (checkoutDrawerExpanded) {
-                  setCheckoutDrawerExpanded(false);
-                  setCheckoutDrawerHeight(DRAWER_MIN);
-                  setTimeout(() => setDesignDrawerOpen(true), 500);
-                } else {
-                  setDesignDrawerOpen(true);
-                }
-              }}
-              style={{ height: checkoutDrawerExpanded ? 38 : 46, padding: checkoutDrawerExpanded ? "0 14px" : "0 18px", borderRadius: 999, border: "none", background: "rgba(244,244,244,0.95)", color: "#111", display: "flex", alignItems: "center", gap: checkoutDrawerExpanded ? 6 : 8, fontSize: checkoutDrawerExpanded ? 13 : 14, fontWeight: 600, cursor: "pointer", transition: "height 0.25s ease, font-size 0.25s ease" }}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="plusGradient" x1="0" y1="10" x2="20" y2="10" gradientUnits="userSpaceOnUse">
-                    <stop offset="-0.88%" stopColor="#DC2626" />
-                    <stop offset="49.94%" stopColor="#4D52D2" />
-                    <stop offset="101.36%" stopColor="#16A34A" />
-                  </linearGradient>
-                </defs>
-                <path d="M10 4v12M4 10h12" stroke="url(#plusGradient)" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-              <span>Add design/text</span>
-            </button>
-          </div>
-        </div>
-
-      </div>
+      {!SCROLL_VERSION && actionBar}
 
       {showPopup && !hasAnyItems && (
         <>
@@ -2429,7 +3218,7 @@ export default function App() {
                 { icon: "icon-uploads.svg", label: "Uploads" },
                 { icon: "icon-sparkles-ai.svg", label: "AI Design" },
               ].map(({ icon, label }) => (
-                <div key={label} onClick={() => { if (label === "Graphics") { dismissPopup(); setGraphicsDrawerOpen(true); } if (label === "Text") { dismissPopup(); setTextOptionsDrawerOpen(true); } }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <div key={label} onClick={() => { if (label === "Graphics") { dismissPopup(); setGraphicsDrawerOpen(true); } if (label === "Text") { dismissPopup(); addNewTextItem(); } }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer" }}>
                   <img src={`/icons/${icon}`} width={24} height={24} alt={label} />
                   <span style={{ fontSize: 11, color: "#111", fontWeight: 600, fontFamily: '"Inter Variable", sans-serif' }}>{label}</span>
                 </div>
@@ -2614,49 +3403,57 @@ export default function App() {
       </div>{/* end blur wrapper */}
 
 
-      {/* Text options drawer */}
-      <Drawer.Root open={textOptionsDrawerOpen} onOpenChange={setTextOptionsDrawerOpen}>
-        <Drawer.Portal>
-          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
-          <Drawer.Content style={{
-            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999,
-            background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16,
-            outline: "none", fontFamily: '"Inter Variable", sans-serif',
-            display: "flex", flexDirection: "column", maxHeight: "80dvh",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 16px", borderBottom: "1px solid #f0f0f0", flexShrink: 0 }}>
-              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>Choose text</span>
-              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setTextOptionsDrawerOpen(false)} />
-            </div>
-            <div ref={textScrollRef} onScroll={e => { textScrollPos.current = (e.currentTarget as HTMLDivElement).scrollTop; }} style={{ overflowY: "auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
-              {TEXT_OPTIONS.map(({ content, color, stroke }) => (
-                <button
-                  key={content}
-                  type="button"
-                  onClick={() => addTextItem(content, color)}
-                  style={{
-                    height: 90, borderRadius: 0, border: "none", borderRight: "1px solid #e8e8e8", borderBottom: "1px solid #e8e8e8",
-                    background: "#fff", cursor: "pointer",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    padding: "8px 12px",
-                  }}
-                >
-                  <span style={{
-                    fontFamily: '"CarterOne", cursive',
-                    fontSize: 22,
-                    color,
-                    lineHeight: 0.9,
-                    whiteSpace: "pre-line",
-                    textAlign: "center",
-                    userSelect: "none",
-                    ...(stroke ? { WebkitTextStroke: `1px ${stroke}` } : {}),
-                  }}>{content}</span>
-                </button>
-              ))}
-            </div>
-          </Drawer.Content>
-        </Drawer.Portal>
-      </Drawer.Root>
+      {/* Mobile edit sheet — the main proto's bottom drawer with the Font /
+          Format / Size / Color / Curve panels, opened at whichever item of
+          the editor bar was tapped. Non-modal, no overlay: the canvas stays
+          visible and live while styling. */}
+      {selectedItem?.type === "text" && <MobileEditSheet
+        open={!editingTextId && !!mobileSheetPanel}
+        initialTab={mobileSheetPanel ?? "Font"}
+        onClose={() => setMobileSheetPanel(null)}
+        text={
+          selectedItem?.type === "text"
+            ? {
+                fontFamily: textItemFamily(selectedItem),
+                fontSize: selectedItem.fontSize,
+                color: selectedItem.color ?? "#000000",
+                colorSet: selectedItem.colorSet !== false,
+                textAlign: selectedItem.textAlign ?? "center",
+                bold: !!selectedItem.bold,
+                italic: !!selectedItem.italic,
+                underline: !!selectedItem.underline,
+              }
+            : null
+        }
+        canBold={fontCaps.canBold}
+        canItalic={fontCaps.canItalic}
+        maxFontSize={maxFontSize}
+        onFontFamilyChange={family => updateSelectedText({ fontFamily: family })}
+        onFontSizeChange={size => updateSelectedText({ fontSize: size })}
+        onColorChange={color => updateSelectedText({ color, colorSet: true })}
+        // Same rule as the proto: on a path, alignment pins to center.
+        onTextAlignChange={align =>
+          updateSelectedText({ textAlign: selectedItem?.textPath ? "center" : align })
+        }
+        onToggleBold={() => updateSelectedText({ bold: !selectedItem?.bold })}
+        onToggleItalic={() => updateSelectedText({ italic: !selectedItem?.italic })}
+        onToggleUnderline={() => updateSelectedText({ underline: !selectedItem?.underline })}
+        onDuplicate={duplicateSelectedItem}
+        onDelete={deleteSelectedItem}
+        onWrite={() => {
+          if (!selectedItem || selectedItem.type !== "text") return;
+          const id = selectedItem.id;
+          // Two separate synchronous commits, in this order, both inside the
+          // tap: the sheet closes and commits first, so the drawer's focus
+          // management is finished before the textarea exists; then the
+          // textarea mounts and takes focus — the proto's exact sequence.
+          flushSync(() => setMobileSheetPanel(null));
+          flushSync(() => setEditingTextId(id));
+          document.querySelector<HTMLTextAreaElement>("[data-text-edit]")?.focus();
+        }}
+        curveId={curveIdForPath(selectedItem?.textPath)}
+        onCurveChange={changeTextCurve}
+      />}
 
       {/* Graphics drawer */}
       <Drawer.Root open={graphicsDrawerOpen} onOpenChange={setGraphicsDrawerOpen}>
@@ -2719,7 +3516,7 @@ export default function App() {
               ].map(({ icon, label }) => (
                 <div key={label} onClick={() => {
                   if (label === "Graphics") { setDesignDrawerOpen(false); setGraphicsDrawerOpen(true); }
-                  if (label === "Text") { setDesignDrawerOpen(false); setTextOptionsDrawerOpen(true); }
+                  if (label === "Text") { setDesignDrawerOpen(false); addNewTextItem(); }
                 }} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, cursor: "pointer" }}>
                   <div style={{ width: 60, height: 60, borderRadius: 16, background: "#f4f4f4", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <img src={`/icons/${icon}`} width={28} height={28} alt={label} />
@@ -2740,26 +3537,7 @@ export default function App() {
         unitPrice={currentPrice}
         outOfStock={selectedProduct.outOfStock[selectedColor] ?? []}
         sizes={selectedProduct.sizes}
-        onAddToCart={async () => {
-          const thumbnail = await generateCartThumbnail();
-          setCartItems(prev => [...prev, {
-            product: selectedProduct.name,
-            color: selectedColor,
-            colorLabel: selectedProduct.colors.find(c => c.key === selectedColor)?.label ?? selectedColor,
-            thumbnail,
-            quantities: { ...quantities },
-            unitPrice: currentPrice,
-            printTechnique: savedPrintTechnique,
-          }]);
-          setCartCount(c => c + (Object.keys(quantities) as string[]).reduce((a: number, k: string) => a + (quantities[k] ?? 0), 0));
-          setQuantities({});
-          setCheckoutDrawerExpanded(false);
-          setCheckoutDrawerHeight(DRAWER_MIN);
-          setTimeout(() => {
-            setToastVisible(true);
-            setTimeout(() => setToastVisible(false), 2500);
-          }, 400);
-        }}
+        onAddToCart={addCurrentToCart}
       />
 
       {/* Slide selection drawer */}
@@ -2828,6 +3606,7 @@ export default function App() {
                       setCheckoutDrawerHeight(checkoutDrawerMaxH);
                       computeHoopframeWarning();
                       if (showPopup) dismissPopup();
+                      scrollBackToProduct(450);
                     }}
                     style={{ background: "none", border: "none", borderRadius: 0, overflow: "hidden", cursor: "pointer", textAlign: "left", padding: 0, width: "100%" }}
                   >
