@@ -21,6 +21,94 @@ import React, {
 } from "react";
 
 /* ------------------------------------------------------------------------- *
+ * Horizontal drag-scroll
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Scroll a horizontal strip by hand from touch, instead of leaving it to the
+ * browser.
+ *
+ * On /scrollversion the app root and stage carry `touch-action: pan-y` so a
+ * finger scrolls the page. iOS Safari intersects touch-action down the whole
+ * ancestor chain, so a strip's own `pan-x` meets `pan-y` above it and nothing
+ * is left — the strip could not be swiped at all. Driving scrollLeft from the
+ * touch sidesteps the intersection; `touch-action: none` on the strip keeps the
+ * browser from also trying. Taps are untouched: nothing is prevented until the
+ * finger actually travels sideways, and a release carries on as a short flick.
+ */
+export function useTouchDragScrollX(ref: React.RefObject<HTMLElement>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let lastX = 0;
+    let lastT = 0;
+    let velocity = 0; // px per ms
+    let dragging = false;
+    let decided = false; // whether this touch is a sideways drag or not
+    let raf = 0;
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      cancelAnimationFrame(raf);
+      startX = lastX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      startLeft = el.scrollLeft;
+      lastT = performance.now();
+      velocity = 0;
+      dragging = false;
+      decided = false;
+    };
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const x = e.touches[0].clientX;
+      const dx = x - startX;
+      const dy = e.touches[0].clientY - startY;
+      if (!decided) {
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        decided = true;
+        dragging = Math.abs(dx) >= Math.abs(dy);
+      }
+      if (!dragging) return;
+      e.preventDefault();
+      el.scrollLeft = startLeft - dx;
+      const now = performance.now();
+      const dt = now - lastT;
+      if (dt > 0) velocity = (x - lastX) / dt;
+      lastX = x;
+      lastT = now;
+    };
+    const onEnd = () => {
+      if (!dragging) return;
+      dragging = false;
+      // A short flick: carry the release speed on, decaying each frame.
+      let v = velocity * 16; // px per ~frame
+      const step = () => {
+        if (Math.abs(v) < 0.5) return;
+        el.scrollLeft -= v;
+        v *= 0.92;
+        raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [ref]);
+}
+
+/* ------------------------------------------------------------------------- *
  * Shell
  * ------------------------------------------------------------------------- */
 
@@ -51,6 +139,7 @@ export function EditorBarShell({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  useTouchDragScrollX(scrollRef);
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
@@ -151,9 +240,12 @@ export function EditorBarShell({
           gap: 8,
           overflowX: "auto",
           overflowY: "hidden",
-          scrollBehavior: "smooth",
+          // No scroll-behavior: smooth here — it would animate every scrollLeft
+          // the drag writes, and the strip would lag behind the finger. The
+          // chevrons ask for smooth themselves.
           padding: 6,
-          touchAction: "pan-x",
+          // Scrolled by useTouchDragScrollX, not the browser (see there).
+          touchAction: "none",
         }}
       >
         {children}

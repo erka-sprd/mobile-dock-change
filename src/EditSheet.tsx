@@ -14,10 +14,25 @@ import { ArrowLeft, X } from "lucide-react";
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 
-import { DeleteIcon, DuplicateIcon, KeyboardIcon } from "./EditorBar";
+import { DeleteIcon, DuplicateIcon, KeyboardIcon, useTouchDragScrollX } from "./EditorBar";
 import { WedgeSlider } from "./WedgeSlider";
 import { FONTS, FontDef, MAX_FONT_SIZE, MIN_FONT_SIZE, loadFont } from "./fonts";
 import { PathMetrics, TEXT_CURVES, TextCurveId, pathMetrics } from "./textPath";
+
+/**
+ * A horizontal strip that scrolls from touch by hand (useTouchDragScrollX) —
+ * the tab row, the font strip, the curve strip. Its own component so each
+ * strip owns its ref: they mount and unmount with their tabs.
+ */
+function HScroll({ style, children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
+  const ref = useRef<HTMLDivElement>(null);
+  useTouchDragScrollX(ref);
+  return (
+    <div ref={ref} className="eb-scroller" style={{ ...style, touchAction: "none" }} {...rest}>
+      {children}
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------------- *
  * Icons the sheet's panels use (proto: mobile/icons.tsx + ui/editor-bar).
@@ -501,7 +516,7 @@ function CurveStrip({
   onCurveChange: (id: TextCurveId | null) => void;
 }) {
   return (
-    <div className="eb-scroller" style={{ display: "flex", width: "100%", alignItems: "center", overflowX: "auto" }}>
+    <HScroll style={{ display: "flex", width: "100%", alignItems: "center", overflowX: "auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px" }}>
         {[null, ...TEXT_CURVES].map(curve => {
           const id = curve?.id ?? null;
@@ -535,7 +550,7 @@ function CurveStrip({
           );
         })}
       </div>
-    </div>
+    </HScroll>
   );
 }
 
@@ -801,9 +816,8 @@ export default function MobileEditSheet({
             ) : text ? (
               <div style={{ display: "flex", flexDirection: "column", paddingBottom: "calc(8px + env(safe-area-inset-bottom))" }}>
                 {/* Pill tabs + duplicate/delete at the row's end, one scroller. */}
-                <div
+                <HScroll
                   data-sheet-tabs="true"
-                  className="eb-scroller"
                   style={{ display: "flex", alignItems: "center", gap: 8, overflowX: "auto", padding: "0 16px", whiteSpace: "nowrap" }}
                 >
                   <button
@@ -847,7 +861,7 @@ export default function MobileEditSheet({
                       <DeleteIcon />
                     </button>
                   </div>
-                </div>
+                </HScroll>
 
                 {/* Panel area — the fixed height create-omat's drawer keeps
                     (184px), panels centred inside it. */}
@@ -855,7 +869,7 @@ export default function MobileEditSheet({
                   {activeTab === "Font" && (
                     /* create-omat's FontGrid mobile: one horizontal strip of
                        96px-wide tiles. */
-                    <div className="eb-scroller" style={{ display: "flex", width: "100%", alignItems: "center", overflowX: "auto" }}>
+                    <HScroll style={{ display: "flex", width: "100%", alignItems: "center", overflowX: "auto" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px" }}>
                         {FONTS.map(font => (
                           <FontButton
@@ -866,7 +880,7 @@ export default function MobileEditSheet({
                           />
                         ))}
                       </div>
-                    </div>
+                    </HScroll>
                   )}
 
                   {activeTab === "Size" && (
