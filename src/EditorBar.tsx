@@ -46,8 +46,9 @@ function Chevron({ rotate }: { rotate: number }) {
 
 export function EditorBarShell({
   children,
+  show,
   ...rest
-}: { children: React.ReactNode } & React.HTMLAttributes<HTMLDivElement>) {
+}: { children: React.ReactNode; show: boolean } & React.HTMLAttributes<HTMLDivElement>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -135,6 +136,7 @@ export function EditorBarShell({
       // styles.css drops the home-indicator clearance on /scrollversion, where
       // the stage is a card mid-page rather than running to the screen's foot.
       data-editor-bar-shell=""
+      aria-hidden={show ? undefined : true}
       style={{
         position: "absolute",
         // One margin all round: 12px off the stage's foot (plus the home
@@ -142,7 +144,13 @@ export function EditorBarShell({
         // bar is wide enough to meet it.
         bottom: "calc(12px + env(safe-area-inset-bottom))",
         left: "50%",
-        transform: "translateX(-50%)",
+        // Stays mounted so it can leave as it came: rises 16px into place
+        // with a fade, and sinks back the same way — the mirror of the
+        // undo/redo + Done row at the top of the stage.
+        transform: show ? "translate(-50%, 0)" : "translate(-50%, 16px)",
+        opacity: show ? 1 : 0,
+        pointerEvents: show ? "auto" : "none",
+        transition: "opacity 0.2s ease, transform 0.2s ease",
         zIndex: 20,
         display: "flex",
         height: 48,
@@ -440,11 +448,10 @@ export function MobileEditorBar({
   onDuplicate,
   onDelete,
 }: MobileEditorBarProps) {
-  if (!show) return null;
-
+  // Always mounted — the shell animates it in and out on `show`.
   const line = <div style={DIVIDER_STYLE} />;
   return (
-    <EditorBarShell data-mobile-editor-bar="true">
+    <EditorBarShell show={show} data-mobile-editor-bar="true">
       <>
         <button type="button" onClick={onWrite} className="eb-item">
           <KeyboardIcon />
@@ -558,11 +565,10 @@ type GraphicEditorBarProps = {
 // duplicate and delete are wired up — the rest render with their press state
 // but do nothing on tap yet, exactly as in the proto.
 export function GraphicEditorBar({ show, onDuplicate, onDelete }: GraphicEditorBarProps) {
-  if (!show) return null;
-
+  // Always mounted — the shell animates it in and out on `show`.
   const line = <div style={DIVIDER_STYLE} />;
   return (
-    <EditorBarShell data-editor-bar="true">
+    <EditorBarShell show={show} data-editor-bar="true">
       <>
         {/* Remove Background — label only, like create-omat. Not wired yet. */}
         <button

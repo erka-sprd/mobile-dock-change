@@ -1994,9 +1994,18 @@ export default function App() {
     </>
   );
 
+  const actionBarHidden = !!selectedDesignId || (showPopup && !hasAnyItems);
   const actionBar = (
     <>
-        <div id="action-bar" data-app-actionbar style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: selectedDesignId || (showPopup && !hasAnyItems) ? 0 : 1, pointerEvents: selectedDesignId || (showPopup && !hasAnyItems) ? "none" : "auto", transition: checkoutDrawerDragging ? "opacity 0.18s ease" : "bottom 0.7s cubic-bezier(0.16,1,0.3,1), opacity 0.18s ease" }}>
+        {/* Leaves like the editor bar (sinks 16px and fades), but comes back
+            with a small overshoot — the bounce easing only on the way in. */}
+        <div id="action-bar" data-app-actionbar style={{ position: "fixed", bottom: checkoutDrawerHeight, left: 0, right: 0, paddingTop: 12, paddingBottom: 12, overflow: "visible", zIndex: 20, opacity: actionBarHidden ? 0 : 1, transform: actionBarHidden ? "translateY(16px)" : "translateY(0)", pointerEvents: actionBarHidden ? "none" : "auto", transition: [
+          checkoutDrawerDragging ? null : "bottom 0.7s cubic-bezier(0.16,1,0.3,1)",
+          "opacity 0.2s ease",
+          // A steep overshoot: over only 16px of travel, a gentler curve's
+          // bounce came to ~1px and read as no bounce at all.
+          actionBarHidden ? "transform 0.2s ease" : "transform 0.5s cubic-bezier(0.3, 2.4, 0.5, 1)",
+        ].filter(Boolean).join(", ") }}>
 
           {/* Change product button — shown only when ck-drawer is at MAX */}
           {/* <div style={{ position: "absolute", inset: 0, zIndex: 17, display: "flex", alignItems: "center", justifyContent: "center", opacity: checkoutDrawerExpanded ? 1 : 0, transform: checkoutDrawerExpanded ? "translateY(0)" : "translateY(60px)", pointerEvents: checkoutDrawerExpanded ? "auto" : "none", transition: checkoutDrawerExpanded ? "opacity 0s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.25s" : "opacity 0.15s ease 0s, transform 0.15s ease 0s" }}>
@@ -2780,11 +2789,11 @@ export default function App() {
             decide this, or the toolbar would never show. */}
         <div style={{ position: "absolute", top: 12, left: 0, right: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px", zIndex: 10, opacity: !SCROLL_VERSION && checkoutDrawerExpanded ? 0 : 1, pointerEvents: !SCROLL_VERSION && checkoutDrawerExpanded ? "none" : "auto", transition: "opacity 0.25s ease" }}>
           <div style={{ display: "flex", gap: 4 }} />
-          <button type="button" onClick={async () => { setSlidePopoverOpen(v => !v); const results = await Promise.all(slides.map(s => generateSideThumbnail(s.label, s.src))); setSideThumbnails(slides.map((s, i) => ({ label: s.label, src: s.src, thumbnail: results[i] }))); }} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
+          <button type="button" onClick={async () => { setSlidePopoverOpen(v => !v); const results = await Promise.all(slides.map(s => generateSideThumbnail(s.label, s.src))); setSideThumbnails(slides.map((s, i) => ({ label: s.label, src: s.src, thumbnail: results[i] }))); }} style={{ position: "absolute", left: "50%", transform: selectedDesignId ? "translate(-50%, -16px)" : "translate(-50%, 0)", height: 40, padding: "0 14px", borderRadius: 999, border: "none", background: "#F4F4F4", color: "#000", display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.2s ease, transform 0.2s ease" }}>
             <span>{slides[activeIndex]?.label ?? "Front"}</span>
             <img src="/icons/icon-chevron-down.svg" width={16} height={16} alt="" />
           </button>
-          <button type="button" onClick={() => setMoreMenuDrawerOpen(true)} style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: selectedDesignId ? 0 : 1, pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.18s ease" }}>
+          <button type="button" onClick={() => setMoreMenuDrawerOpen(true)} style={{ background: "#F4F4F4", border: "none", borderRadius: 999, width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: selectedDesignId ? 0 : 1, transform: selectedDesignId ? "translateY(-16px)" : "translateY(0)", pointerEvents: selectedDesignId ? "none" : "auto", transition: "opacity 0.2s ease, transform 0.2s ease" }}>
             <img src="/icons/icon-dots-horizontal.svg" width={20} height={20} alt="More" />
           </button>
         </div>
