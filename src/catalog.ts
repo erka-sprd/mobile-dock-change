@@ -27,6 +27,9 @@ export type DockProduct = {
   defaultColor: string;
   sizes: string[];
   outOfStock: Record<string, string[]>;
+  /** Colours with every size out of stock — unselectable, like create-omat's
+      out-of-stock appearance swatch. */
+  soldOutColors: Set<string>;
   modelImageFront: string | null;
   thumbnail: (colorKey: string) => string;
   slidesFor: (colorKey: string) => DockSlide[];
@@ -48,6 +51,16 @@ export function toDockProduct(p: StaticProduct): DockProduct {
   }));
   const sizes = pt.sizes.map((s) => s.name);
   const outOfStock = buildOutOfStockMap(pt.id, pt.appearances, pt.sizes);
+  const soldOutColors = new Set(
+    colors
+      .filter((c) => sizes.length > 0 && sizes.every((s) => (outOfStock[c.key] ?? []).includes(s)))
+      .map((c) => c.key)
+  );
+  // Never open a product on a colour nobody can buy.
+  const preferred = pt.defaultAppearanceId || colors[0]?.key || "";
+  const defaultColor = soldOutColors.has(preferred)
+    ? colors.find((c) => !soldOutColors.has(c.key))?.key ?? preferred
+    : preferred;
 
   const appFor = (key: string) => appById.get(key) ?? pt.appearances[0];
 
@@ -69,9 +82,10 @@ export function toDockProduct(p: StaticProduct): DockProduct {
     embroidery: p.embroidery,
     price: p.price,
     colors,
-    defaultColor: pt.defaultAppearanceId || colors[0]?.key || "",
+    defaultColor,
     sizes,
     outOfStock,
+    soldOutColors,
     modelImageFront: pt.modelImageFront ? img(pt.modelImageFront) : null,
     thumbnail: (key) => img(appFor(key)?.image),
     slidesFor: (key) => {
@@ -97,6 +111,7 @@ export const EMPTY_DOCK_PRODUCT: DockProduct = {
   defaultColor: "",
   sizes: [],
   outOfStock: {},
+  soldOutColors: new Set(),
   modelImageFront: null,
   thumbnail: () => "",
   slidesFor: () => [],

@@ -70,6 +70,36 @@ function isLightHex(hex: string): boolean {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.7;
 }
 
+/**
+ * create-omat's out-of-stock appearance mark (AppearanceItem): a neutral-300
+ * hairline frame over the swatch's whole footprint, crossed by a neutral-400
+ * 1px diagonal from top-right to bottom-left. Absolute, so a sold-out swatch
+ * is exactly the size of an available one. The swatch itself fades to 60%
+ * (only the colour/product — never this mark, which must stay crisp).
+ */
+function SoldOutMark({ radius }: { radius: number | string }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        borderRadius: radius,
+        border: "1px solid #c7c7c7",
+        boxSizing: "border-box",
+        pointerEvents: "none",
+        // `to bottom right` puts the 50% band on the top-right/bottom-left
+        // diagonal at any aspect ratio — create-omat's exact strike.
+        background:
+          "linear-gradient(to bottom right, transparent calc(50% - 0.5px), #afafaf calc(50% - 0.5px), #afafaf calc(50% + 0.5px), transparent calc(50% + 0.5px))",
+      }}
+    />
+  );
+}
+
+/** Accessible name for a swatch — create-omat appends the reason when sold out. */
+const swatchLabel = (label: string, soldOut: boolean) => (soldOut ? `${label}, out of stock` : label);
+
 function getContainRect(containerW: number, containerH: number, imgW: number, imgH: number) {
   const containerRatio = containerW / containerH;
   const imgRatio = imgW / imgH;
@@ -119,7 +149,8 @@ export default function App() {
       if (!initial) return;
       setSelectedProductId(initial.id);
       const savedColor = localStorage.getItem("selectedColor");
-      const colorOk = initial.colors.some(c => c.key === savedColor);
+      const colorOk =
+        initial.colors.some(c => c.key === savedColor) && !initial.soldOutColors.has(savedColor ?? "");
       setSelectedColor(colorOk ? savedColor! : initial.defaultColor);
     });
     return () => {
@@ -2936,15 +2967,18 @@ export default function App() {
             // on the header's 20px edge — so the selected tile's frame lines
             // up with the title above instead of sticking out past it.
             gap: SCROLL_VERSION ? 0 : 4, padding: SCROLL_VERSION ? "0 20px" : "0 16px", marginBottom: 14, marginTop: `${8 - interp * 8}px`, scrollbarWidth: "none", touchAction: checkoutDrawerExpanded ? "auto" : "pan-x", transition: checkoutDrawerDragging ? "none" : "margin-top 0.3s ease" }}>
-            {selectedProduct.colors.map(({ key, label, hex }) =>
+            {selectedProduct.colors.map(({ key, label, hex }) => {
+              const soldOut = selectedProduct.soldOutColors.has(key);
               /* Inline, the colours are the product in that colour rather than
                  a disc of it — create-omat's desktop swatch: a 50px tile, the
                  thumbnail contained inside it, and the chosen one framed. */
-              SCROLL_VERSION ? (
+              return SCROLL_VERSION ? (
                 <button
                   key={key}
                   type="button"
-                  aria-label={label}
+                  aria-label={swatchLabel(label, soldOut)}
+                  title={swatchLabel(label, soldOut)}
+                  disabled={soldOut}
                   onClick={() => setSelectedColor(key)}
                   style={{
                     flexShrink: 0,
@@ -2959,7 +2993,8 @@ export default function App() {
                     alignItems: "center",
                     justifyContent: "center",
                     overflow: "hidden",
-                    cursor: "pointer",
+                    position: "relative",
+                    cursor: soldOut ? "not-allowed" : "pointer",
                   }}
                 >
                   <img
@@ -2970,14 +3005,18 @@ export default function App() {
                       maxHeight: "100%",
                       objectFit: "contain",
                       display: "block",
+                      opacity: soldOut ? 0.6 : 1,
                     }}
                   />
+                  {soldOut && <SoldOutMark radius={8} />}
                 </button>
               ) : (
                 <button
                   key={key}
                   type="button"
-                  aria-label={label}
+                  aria-label={swatchLabel(label, soldOut)}
+                  title={swatchLabel(label, soldOut)}
+                  disabled={soldOut}
                   onClick={() => setSelectedColor(key)}
                   style={{
                     flexShrink: 0, width: 44, height: 44, aspectRatio: "1 / 1",
@@ -2985,20 +3024,29 @@ export default function App() {
                     border: "none",
                     background: "none",
                     padding: 0, boxSizing: "border-box", overflow: "visible",
-                    cursor: "pointer", position: "relative",
+                    cursor: soldOut ? "not-allowed" : "pointer", position: "relative",
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}
                 >
-                  <div style={{ width: "75%", height: "75%", borderRadius: "50%", background: hex || "#ccc", boxShadow: key === selectedColor ? `0 0 0 2px #F4F4F4, 0 0 0 3px #111` : `0 0 0 2px #F4F4F4, 0 0 0 3px #d0d0d0`, display: "flex", alignItems: "center", justifyContent: "center", transition: "box-shadow 0.2s ease" }}>
-                    {key === selectedColor && (
+                  {/* Sold out: the disc fades and loses its own ring — the
+                      mark's frame takes the ring's place, crisp at full
+                      strength, so the circle doesn't get a double outline. */}
+                  <div style={{ width: "75%", height: "75%", borderRadius: "50%", background: hex || "#ccc", opacity: soldOut ? 0.6 : 1, boxShadow: soldOut ? "none" : key === selectedColor ? `0 0 0 2px #F4F4F4, 0 0 0 3px #111` : `0 0 0 2px #F4F4F4, 0 0 0 3px #d0d0d0`, display: "flex", alignItems: "center", justifyContent: "center", transition: "box-shadow 0.2s ease" }}>
+                    {key === selectedColor && !soldOut && (
                       <svg width="45%" height="45%" viewBox="0 0 24 24" fill="none" stroke={isLightHex(hex) ? "#555" : "#fff"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     )}
                   </div>
+                  {/* Same footprint as the ring it replaces (75% disc + 3px). */}
+                  {soldOut && (
+                    <span style={{ position: "absolute", width: "calc(75% + 6px)", height: "calc(75% + 6px)" }}>
+                      <SoldOutMark radius="50%" />
+                    </span>
+                  )}
                 </button>
-              )
-            )}
+              );
+            })}
           </div>
           ); })()}
 
@@ -3380,11 +3428,15 @@ export default function App() {
                 scrollbarWidth: "none",
                 WebkitOverflowScrolling: "touch" as any,
               }}>
-                {selectedProduct.colors.map(({ key, label }, i) => (
+                {selectedProduct.colors.map(({ key, label }, i) => {
+                  const soldOut = selectedProduct.soldOutColors.has(key);
+                  return (
                   <button
                     key={key}
                     type="button"
-                    aria-label={label}
+                    aria-label={swatchLabel(label, soldOut)}
+                    title={swatchLabel(label, soldOut)}
+                    disabled={soldOut}
                     onClick={() => setSelectedColor(key)}
                     style={{
                       width: 58,
@@ -3399,7 +3451,7 @@ export default function App() {
                       flexShrink: 0,
                       boxSizing: "border-box",
                       overflow: "hidden",
-                      cursor: "pointer",
+                      cursor: soldOut ? "not-allowed" : "pointer",
                       marginRight: -1,
                       position: "relative",
                       zIndex: key === selectedColor ? 1 : 0,
@@ -3408,10 +3460,18 @@ export default function App() {
                     <img
                       src={selectedProduct.thumbnail(key)}
                       alt={label}
-                      style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6, display: "block" }}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6, display: "block", opacity: soldOut ? 0.6 : 1 }}
                     />
+                    {/* Inset to the image's own box, inside the strip's
+                        shared hairline cell borders. */}
+                    {soldOut && (
+                      <span style={{ position: "absolute", inset: 8 }}>
+                        <SoldOutMark radius={6} />
+                      </span>
+                    )}
                   </button>
-                ))}
+                  );
+                })}
                 <div style={{ width: 12, flexShrink: 0 }} />
               </div>
               <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 48, background: "linear-gradient(to right, transparent, #fff)", pointerEvents: "none" }} />
@@ -3694,7 +3754,7 @@ export default function App() {
           setSelectedProductId(next.id);
           // The tile's shown colour when the product has it, else its default.
           setSelectedColor(
-            next.colors.some(c => c.key === sel.appearanceId)
+            next.colors.some(c => c.key === sel.appearanceId) && !next.soldOutColors.has(sel.appearanceId)
               ? sel.appearanceId
               : next.defaultColor
           );
