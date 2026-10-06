@@ -3219,16 +3219,73 @@ export default function App() {
                 <div style={{ padding: `0 ${Math.round(16 + interp * 4)}px`, display: "flex", flexDirection: "column", gap: 8 }}>
                   {hasItemsOnPrintAreas && embroiderySupported && (
                     <div style={{ display: "flex", flexDirection: "column" }}>
-                    <span style={{ display: "inline-block", alignSelf: "flex-start", background: "#111", color: "#fff", fontSize: 12, fontWeight: 500, padding: "3px 8px", fontFamily: '"Inter Variable", sans-serif', opacity: interp }}>Print technique</span>
-                    <button
-                      type="button"
-                      onClick={async () => { const { dataUrl, bbox } = await flattenDesignItems(); setEmbroideryDataUrl(dataUrl || null); setDesignBbox(bbox); const warn = savedPrintTechnique === "embroidery" && bbox ? (() => { const area = bbox.width * bbox.height; if (area <= 1/7) return false; return Math.sqrt((1/7) / area) < 0.8; })() : false; setHoopframeWarning(warn); setEmbroideryRenderedUrl(null); setPreviewLoading(true); setPreviewDrawerOpen(true); setTimeout(() => setPreviewLoading(false), 1500); }}
-                      style={{ width: "100%", height: 54, borderRadius: 0, border: "2px solid #111", background: "none", color: "#111", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", opacity: interp }}
-                    >
-                      <img src={savedPrintTechnique === "embroidery" ? "/icons/icon-needle-embroidery.svg" : "/icons/icon-droplet.svg"} width={20} height={20} alt="" style={{ filter: "brightness(0)" }} />
-                      <span style={{ flex: 1, textAlign: "left" }}>{savedPrintTechnique === "embroidery" ? "Embroidery" : "Standard print"}</span>
-                      <img src="/icons/icon-chevron-down.svg" width={18} height={18} alt="" style={{ filter: "brightness(0)" }} />
-                    </button>
+                    {/* Pill switcher (the design's "Pill Button Group"): a
+                        light grey track, the chosen technique on a white pill
+                        that slides between the two. Replaces the dropdown —
+                        the old technique drawer is no longer opened. 54px tall
+                        overall, level with the size trigger below. */}
+                    <div role="radiogroup" aria-label="Print technique" style={{ position: "relative", display: "flex", height: 54, padding: 5, boxSizing: "border-box", borderRadius: 999, background: "#F4F4F4", opacity: interp }}>
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          position: "absolute",
+                          top: 5,
+                          bottom: 5,
+                          left: 5,
+                          width: "calc(50% - 5px)",
+                          borderRadius: 999,
+                          background: "#fff",
+                          transform: savedPrintTechnique === "embroidery" ? "translateX(100%)" : "translateX(0)",
+                          transition: "transform 0.25s cubic-bezier(0.16,1,0.3,1)",
+                        }}
+                      />
+                      {([
+                        { key: "standard", label: "Standard print" },
+                        { key: "embroidery", label: "Embroidery" },
+                      ] as const).map(({ key, label }) => {
+                        const selected = savedPrintTechnique === key;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() => {
+                              if (selected) return;
+                              setPrintTechnique(key);
+                              setSavedPrintTechnique(key);
+                              // The hoop-frame warning only applies to
+                              // embroidery — recheck it for the new choice.
+                              if (key !== "embroidery" || designItems.length === 0) { setHoopframeWarning(false); return; }
+                              flattenDesignItems().then(({ bbox }) => {
+                                if (!bbox) { setHoopframeWarning(false); return; }
+                                const area = bbox.width * bbox.height;
+                                setHoopframeWarning(area > 1 / 7 && Math.sqrt((1 / 7) / area) < 0.8);
+                              });
+                            }}
+                            style={{
+                              position: "relative",
+                              flex: 1,
+                              minWidth: 0,
+                              height: "100%",
+                              borderRadius: 999,
+                              border: "none",
+                              background: "none",
+                              color: "#111",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: "0 12px",
+                              fontSize: 14,
+                              fontWeight: 600,
+                              cursor: selected ? "default" : "pointer",
+                            }}
+                          >
+                            <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                     </div>
                   )}
                   {/* The main proto's desktop selector row (its basket-hypotheses

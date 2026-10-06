@@ -4,7 +4,14 @@
    (Drawer.Content / popover content) gets this class.
 
    All reset selectors sit inside :where() so they keep ZERO specificity, like
-   Tailwind's real preflight — utility classes must always win over them. */
+   Tailwind's real preflight — utility classes must always win over them.
+
+   `@tailwind base` is needed even with preflight off: it is what declares the
+   --tw-rotate / --tw-translate-* / --tw-scale-* defaults the transform
+   utilities compose from. Without it every `rotate-180` resolved to an
+   invalid transform and was dropped — the category back arrow pointed
+   forward. With preflight off, base emits only those variable defaults. */
+@tailwind base;
 @tailwind utilities;
 
 :where(.tw-scope),
