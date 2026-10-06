@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { Drawer } from "vaul";
 import { CurvedText } from "./CurvedText";
 import MobileEditSheet, { TextTab } from "./EditSheet";
@@ -439,6 +439,11 @@ export default function App() {
   const itemSizeRefs = useRef<Map<string, { w: number; h: number }>>(new Map());
   const itemElRefs = useRef<Map<string, HTMLElement>>(new Map());
   const doneBtnRef = useRef<HTMLButtonElement>(null);
+  // The undo/redo + Done row — followed by hand on /scrollversion (see the
+  // effect beside the tap-deselect handler).
+  const selectionRowRef = useRef<HTMLDivElement>(null);
+  // Its pinned /scrollversion copy (portalled to <body>).
+  const pinnedRowRef = useRef<HTMLDivElement>(null);
   const pendingSnapItemId = useRef<string | null>(null);
   const designGestureRef = useRef<
     | { type: "idle" }
@@ -1028,6 +1033,55 @@ export default function App() {
   }, [selectedDesignId]);
 
   /**
+   * …and so does any tap anywhere on the stage — product, empty grey, the
+   * editor bar, undo/redo. A tap only: one finger dragging the stage is the
+   * page scrolling here, and a pinch is a zoom, so movement past a small slop
+   * or a second pointer cancels it. Capture phase on the stage itself, so the
+   * bars that stop their touches' propagation still count.
+   */
+  useEffect(() => {
+    if (!SCROLL_VERSION) return;
+    const stage = editorRef.current;
+    // The pinned undo/redo + Done copy is portalled out of the stage, but it
+    // belongs to the canvas all the same — a tap on it counts too.
+    const pinned = pinnedRowRef.current;
+    if (!stage) return;
+    const TAP_SLOP_PX = 10;
+    const down = new Map<number, { x: number; y: number }>();
+    let isTap = false;
+    const onDown = (e: PointerEvent) => {
+      down.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      isTap = down.size === 1;
+    };
+    const onMove = (e: PointerEvent) => {
+      const start = down.get(e.pointerId);
+      if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > TAP_SLOP_PX) isTap = false;
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!down.delete(e.pointerId)) return;
+      if (down.size > 0 || !isTap) return;
+      isTap = false;
+      if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    const onCancel = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+      isTap = false;
+    };
+    stage.addEventListener("pointerdown", onDown, true);
+    pinned?.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onCancel, true);
+    return () => {
+      stage.removeEventListener("pointerdown", onDown, true);
+      pinned?.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onCancel, true);
+    };
+  }, []);
+
+  /**
    * Inline, a gesture on the stage is either the page's or the product's —
    * never both.
    *
@@ -1561,6 +1615,50 @@ export default function App() {
     localStorage.setItem("selectedColor", selectedColor);
   }, [selectedColor]);
 
+  // /scrollversion: the undo/redo + Done row in the stage scrolls away with the
+  // page. Once it is off the top of the screen, a second copy fades in pinned
+  // there (fixed, 12px under the status bar) — and fades out again before the
+  // editor bar could reach it, so the two never touch. Two IntersectionObservers
+  // decide that; nothing runs per scroll. (CSS sticky can't host the copy:
+  // data-app-root clips overflow-x, which makes it the sticky container, and it
+  // never scrolls itself.)
+  const [rowScrolledAway, setRowScrolledAway] = useState(false);
+  const [barLineReached, setBarLineReached] = useState(false);
+  const barLineRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!SCROLL_VERSION) return;
+    const row = selectionRowRef.current;
+    const line = barLineRef.current;
+    if (!row || !line) return;
+    // env() can't be read from JS directly — measure it once off a probe.
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;top:0;height:env(safe-area-inset-top,0px);visibility:hidden;pointer-events:none";
+    document.body.appendChild(probe);
+    const safeTop = Math.round(probe.getBoundingClientRect().height);
+    probe.remove();
+
+    // "Above the line": out of the observed band, and above it rather than below.
+    const above = (e: IntersectionObserverEntry) =>
+      !e.isIntersecting && !!e.rootBounds && e.boundingClientRect.top < e.rootBounds.top;
+    // The row counts as gone once it has cleared the status bar.
+    const rowObs = new IntersectionObserver(([e]) => setRowScrolledAway(above(e)), {
+      rootMargin: `-${safeTop}px 0px 0px 0px`,
+    });
+    // The pinned copy spans 12..60px under the status bar; hide it once the
+    // editor bar's top climbs to 12px below that (72px).
+    const lineObs = new IntersectionObserver(([e]) => setBarLineReached(above(e)), {
+      rootMargin: `-${safeTop + 72}px 0px 0px 0px`,
+    });
+    rowObs.observe(row);
+    lineObs.observe(line);
+    return () => {
+      rowObs.disconnect();
+      lineObs.disconnect();
+    };
+    // Re-attached per selection, so the refs are certain to be mounted.
+  }, [selectedDesignId]);
+  const showPinnedRow = SCROLL_VERSION && !!selectedDesignId && rowScrolledAway && !barLineReached;
+
   // Tap outside the selection deselects — but only a TAP, like the main proto
   // (which deselects on `click`, never on a drag, pan or pinch). A touch that
   // starts outside arms a candidate; moving past the slop or adding a second
@@ -1831,6 +1929,70 @@ export default function App() {
       setTimeout(() => setToastVisible(false), 2500);
     }, 400);
   };
+
+  /**
+   * The undo/redo pill and the black Done button — one markup for the row in
+   * the stage and its pinned /scrollversion copy, so the two cannot drift.
+   * Only the in-stage Done carries doneBtnRef (the tap-deselect handler's
+   * exclusion); the copy's container stops touch propagation itself.
+   */
+  const selectionControls = (doneRef: React.Ref<HTMLButtonElement> | null) => (
+    <>
+      {/* Same 48px white pill as the editor bar, two icon items in it. */}
+      <div style={{ display: "flex", height: 48, boxSizing: "border-box", alignItems: "center", gap: 2, padding: 6, borderRadius: 999, background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.10)" }}>
+        <button type="button" aria-label="Undo" className="eb-item" style={{ width: 36, justifyContent: "center", padding: 0, borderRadius: 999 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              fillRule="evenodd"
+              clipRule="evenodd"
+              d="M9.70711 13.2929C10.0676 13.6534 10.0953 14.2206 9.7903 14.6129L9.70711 14.7071C9.34662 15.0676 8.77939 15.0953 8.3871 14.7903L8.29289 14.7071L4.29289 10.7071C4.2575 10.6717 4.22531 10.6343 4.19633 10.5953L4.12467 10.4841L4.07123 10.3713L4.03585 10.266L4.01102 10.1485L4.00398 10.0898L4 10L4.00279 9.92476L4.02024 9.79927L4.04974 9.68786L4.09367 9.57678L4.146 9.47929L4.2097 9.3871L4.29289 9.29289L8.29289 5.29289C8.68342 4.90237 9.31658 4.90237 9.70711 5.29289C10.0676 5.65338 10.0953 6.22061 9.7903 6.6129L9.70711 6.70711L7.415 9H16C18.7614 9 21 11.2386 21 14C21 16.6888 18.8777 18.8818 16.2169 18.9954L16 19H15C14.4477 19 14 18.5523 14 18C14 17.4872 14.386 17.0645 14.8834 17.0067L15 17H16C17.6569 17 19 15.6569 19 14C19 12.4023 17.7511 11.0963 16.1763 11.0051L16 11H7.415L9.70711 13.2929Z"
+              fill="currentColor"
+            />
+          </svg>
+        </button>
+        <button type="button" aria-label="Redo" className="eb-item" style={{ width: 36, justifyContent: "center", padding: 0, borderRadius: 999 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M10 19H9C6.23 19 4 16.7618 4 14.0039C4 11.2361 6.23 9.00785 9 9.00785H17.59L15.29 6.71965V6.71865C14.89 6.31896 14.89 5.68946 15.29 5.29976C15.68 4.90008 16.31 4.90008 16.71 5.29976L20.71 9.29662V9.29563C20.8 9.38555 20.87 9.49547 20.92 9.62537C20.97 9.74527 20.99 9.86518 21 10.0051C20.99 10.135 20.97 10.2549 20.92 10.3848C20.87 10.5047 20.8 10.6146 20.71 10.7145L16.71 14.7114C16.31 15.1011 15.68 15.1011 15.29 14.7114C14.89 14.3117 14.89 13.6822 15.289 13.2925L17.589 11.0043H8.99C7.33 11.0043 5.99 12.3432 5.99 14.0019C5.99 15.6506 7.33 16.9996 8.99 16.9996H9.99C10.54 16.9996 10.99 17.4392 10.99 17.9988C10.99 18.5484 10.54 18.998 9.99 18.998L10 19Z"
+              fill="currentColor"
+            />
+          </svg>
+        </button>
+      </div>
+
+      {/* The main proto's Done pill (create-omat's DockUnselectButton). */}
+      <button
+        ref={doneRef ?? undefined}
+        type="button"
+        onClick={() => setSelectedDesignId(null)}
+        style={{
+          display: "inline-flex",
+          minHeight: 40,
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          borderRadius: 24,
+          border: "none",
+          background: "#000",
+          padding: "12px 16px",
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#fff",
+          cursor: "pointer",
+          fontFamily: '"Inter Variable", sans-serif',
+          boxShadow: "0px 2px 4px 0px #25211F0D",
+        }}
+      >
+        Done
+        <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M19.2929 6.29289C19.6834 5.90237 20.3166 5.90237 20.7071 6.29289C21.0676 6.65338 21.0953 7.22061 20.7903 7.6129L20.7071 7.70711L10.7071 17.7071C10.3466 18.0676 9.77939 18.0953 9.3871 17.7903L9.29289 17.7071L4.29289 12.7071C3.90237 12.3166 3.90237 11.6834 4.29289 11.2929C4.65338 10.9324 5.22061 10.9047 5.6129 11.2097L5.70711 11.2929L10 15.585L19.2929 6.29289Z"
+            fill="currentColor"
+          />
+        </svg>
+      </button>
+    </>
+  );
 
   const actionBar = (
     <>
@@ -2627,8 +2789,8 @@ export default function App() {
           </button>
         </div>
 
-        {/* Objects editor bars — the main proto's floating pill at the top of
-            the canvas, one bar per selection type in the same shell: text gets
+        {/* Objects editor bars — the main proto's floating pill, here at the
+            foot of the canvas, one bar per selection type in the same shell: text gets
             the mobile text bar, artwork the design bar. Duplicate and delete
             are the live actions; the rest render like the proto's unwired
             items. Same mount for the default route and /scrollversion — the
@@ -2658,10 +2820,15 @@ export default function App() {
           onDelete={deleteSelectedItem}
         />
 
-        {/* Selection controls — undo/redo at the canvas's bottom-left, the
-            main proto's black "Done ✓" pill at its bottom-right, 12px off the
-            stage edges like the editor bar. Undo/redo are visual only for now. */}
+        {/* Selection controls — undo/redo at the canvas's top-left, the main
+            proto's black "Done ✓" pill at its top-right, 12px off the stage
+            edges like the editor bar (which sits at the foot). They take the
+            place of the side picker and "…" button, which hide while an
+            object is selected. Undo/redo are visual only for now. On
+            /scrollversion a pinned copy takes over once this row scrolls off
+            the screen (see showPinnedRow). */}
         <div
+          ref={selectionRowRef}
           onTouchStart={e => e.stopPropagation()}
           onTouchMove={e => e.stopPropagation()}
           onTouchEnd={e => e.stopPropagation()}
@@ -2669,73 +2836,56 @@ export default function App() {
             position: "absolute",
             left: 12,
             right: 12,
-            // Default route: the stage runs to the screen's foot, so clear
-            // the home indicator too. Inline the stage is a card mid-page.
-            bottom: SCROLL_VERSION ? 12 : "calc(12px + env(safe-area-inset-bottom))",
+            top: 12,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
             zIndex: 20,
             opacity: selectedDesignId ? 1 : 0,
-            transform: selectedDesignId ? "translateY(0)" : "translateY(16px)",
+            transform: selectedDesignId ? "translateY(0)" : "translateY(-16px)",
             pointerEvents: selectedDesignId ? "auto" : "none",
             transition: "opacity 0.2s ease, transform 0.2s ease",
           }}
         >
-          {/* Same 48px white pill as the editor bar, two icon items in it. */}
-          <div style={{ display: "flex", height: 48, boxSizing: "border-box", alignItems: "center", gap: 2, padding: 6, borderRadius: 999, background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.10)" }}>
-            <button type="button" aria-label="Undo" className="eb-item" style={{ width: 36, justifyContent: "center", padding: 0, borderRadius: 999 }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  fillRule="evenodd"
-                  clipRule="evenodd"
-                  d="M9.70711 13.2929C10.0676 13.6534 10.0953 14.2206 9.7903 14.6129L9.70711 14.7071C9.34662 15.0676 8.77939 15.0953 8.3871 14.7903L8.29289 14.7071L4.29289 10.7071C4.2575 10.6717 4.22531 10.6343 4.19633 10.5953L4.12467 10.4841L4.07123 10.3713L4.03585 10.266L4.01102 10.1485L4.00398 10.0898L4 10L4.00279 9.92476L4.02024 9.79927L4.04974 9.68786L4.09367 9.57678L4.146 9.47929L4.2097 9.3871L4.29289 9.29289L8.29289 5.29289C8.68342 4.90237 9.31658 4.90237 9.70711 5.29289C10.0676 5.65338 10.0953 6.22061 9.7903 6.6129L9.70711 6.70711L7.415 9H16C18.7614 9 21 11.2386 21 14C21 16.6888 18.8777 18.8818 16.2169 18.9954L16 19H15C14.4477 19 14 18.5523 14 18C14 17.4872 14.386 17.0645 14.8834 17.0067L15 17H16C17.6569 17 19 15.6569 19 14C19 12.4023 17.7511 11.0963 16.1763 11.0051L16 11H7.415L9.70711 13.2929Z"
-                  fill="currentColor"
-                />
-              </svg>
-            </button>
-            <button type="button" aria-label="Redo" className="eb-item" style={{ width: 36, justifyContent: "center", padding: 0, borderRadius: 999 }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M10 19H9C6.23 19 4 16.7618 4 14.0039C4 11.2361 6.23 9.00785 9 9.00785H17.59L15.29 6.71965V6.71865C14.89 6.31896 14.89 5.68946 15.29 5.29976C15.68 4.90008 16.31 4.90008 16.71 5.29976L20.71 9.29662V9.29563C20.8 9.38555 20.87 9.49547 20.92 9.62537C20.97 9.74527 20.99 9.86518 21 10.0051C20.99 10.135 20.97 10.2549 20.92 10.3848C20.87 10.5047 20.8 10.6146 20.71 10.7145L16.71 14.7114C16.31 15.1011 15.68 15.1011 15.29 14.7114C14.89 14.3117 14.89 13.6822 15.289 13.2925L17.589 11.0043H8.99C7.33 11.0043 5.99 12.3432 5.99 14.0019C5.99 15.6506 7.33 16.9996 8.99 16.9996H9.99C10.54 16.9996 10.99 17.4392 10.99 17.9988C10.99 18.5484 10.54 18.998 9.99 18.998L10 19Z"
-                  fill="currentColor"
-                />
-              </svg>
-            </button>
-          </div>
-
-          {/* The main proto's Done pill (create-omat's DockUnselectButton). */}
-          <button
-            ref={doneBtnRef}
-            type="button"
-            onClick={() => setSelectedDesignId(null)}
-            style={{
-              display: "inline-flex",
-              minHeight: 40,
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              borderRadius: 24,
-              border: "none",
-              background: "#000",
-              padding: "12px 16px",
-              fontSize: 12,
-              fontWeight: 600,
-              color: "#fff",
-              cursor: "pointer",
-              fontFamily: '"Inter Variable", sans-serif',
-              boxShadow: "0px 2px 4px 0px #25211F0D",
-            }}
-          >
-            Done
-            <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path
-                d="M19.2929 6.29289C19.6834 5.90237 20.3166 5.90237 20.7071 6.29289C21.0676 6.65338 21.0953 7.22061 20.7903 7.6129L20.7071 7.70711L10.7071 17.7071C10.3466 18.0676 9.77939 18.0953 9.3871 17.7903L9.29289 17.7071L4.29289 12.7071C3.90237 12.3166 3.90237 11.6834 4.29289 11.2929C4.65338 10.9324 5.22061 10.9047 5.6129 11.2097L5.70711 11.2929L10 15.585L19.2929 6.29289Z"
-                fill="currentColor"
-              />
-            </svg>
-          </button>
+          {selectionControls(doneBtnRef)}
         </div>
+
+        {/* The editor bar's top edge (12px foot + 48px bar), as a 1px marker
+            the pinned row's observer can watch — the bar itself mounts and
+            unmounts with the selection. */}
+        {SCROLL_VERSION && (
+          <div ref={barLineRef} aria-hidden="true" style={{ position: "absolute", left: 0, right: 0, bottom: 60, height: 1, pointerEvents: "none" }} />
+        )}
+
+        {/* The pinned copy — portalled to <body> so no stage ancestor can
+            clip or re-anchor its `position: fixed`. Lined up with the
+            in-stage row: card 8px off the screen edge + the row's 12px. */}
+        {SCROLL_VERSION &&
+          createPortal(
+            <div
+              ref={pinnedRowRef}
+              onTouchStart={e => e.stopPropagation()}
+              onTouchMove={e => e.stopPropagation()}
+              onTouchEnd={e => e.stopPropagation()}
+              style={{
+                position: "fixed",
+                left: 20,
+                right: 20,
+                top: "calc(12px + env(safe-area-inset-top, 0px))",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                zIndex: 30,
+                opacity: showPinnedRow ? 1 : 0,
+                transform: showPinnedRow ? "translateY(0)" : "translateY(-16px)",
+                pointerEvents: showPinnedRow ? "auto" : "none",
+                transition: "opacity 0.2s ease, transform 0.2s ease",
+              }}
+            >
+              {selectionControls(null)}
+            </div>,
+            document.body
+          )}
 
         {/* Inline, the action bar belongs to the stage — inside it, so the grey
             is one rounded card rather than two blocks that have to be made to

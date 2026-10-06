@@ -119,6 +119,12 @@ body.scroll-version [data-ck-fade] {
   display: none !important;
 }
 
+/* The editor bar sits at the stage's foot. Inline the stage is a card
+   mid-page, so there is no home indicator to clear — a plain 12px. */
+body.scroll-version [data-editor-bar-shell] {
+  bottom: 12px !important;
+}
+
 /* The title keeps to one line and fades off at the right.
 
    Inline it reads that off the drawer's height: one line while the sheet is

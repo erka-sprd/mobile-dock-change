@@ -65,7 +65,16 @@ export function EditorBarShell({
       setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
     });
   }, []);
-  useEffect(() => () => cancelAnimationFrame(scrollStateRaf.current), []);
+  // Clear the id along with the frame: StrictMode unmounts and remounts once,
+  // and a stale non-zero id left here made every later check bail out — so
+  // the chevrons never appeared.
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(scrollStateRaf.current);
+      scrollStateRaf.current = 0;
+    },
+    []
+  );
 
   // Re-check when the items change, not only on mount: a bar gains and loses
   // controls as the selection changes, and that alone can make it overflow.
@@ -104,8 +113,9 @@ export function EditorBarShell({
         // Explicit: iOS paints button text (and so currentColor) blue.
         color: "#111",
         ...(dir === "left"
-          ? { left: -2, borderRadius: "999px 0 0 999px", borderRight: "1px solid #e5e5e5" }
-          : { right: -2, borderRadius: "0 999px 999px 0", borderLeft: "1px solid #e5e5e5" }),
+          // create-omat: border-neutral-200 — the kit's #dedede.
+          ? { left: -2, borderRadius: "999px 0 0 999px", borderRight: "1px solid #dedede" }
+          : { right: -2, borderRadius: "0 999px 999px 0", borderLeft: "1px solid #dedede" }),
       }}
     >
       <span style={{ padding: 8, display: "flex" }}>
@@ -122,11 +132,15 @@ export function EditorBarShell({
       onTouchStart={e => e.stopPropagation()}
       onTouchMove={e => e.stopPropagation()}
       onTouchEnd={e => e.stopPropagation()}
+      // styles.css drops the home-indicator clearance on /scrollversion, where
+      // the stage is a card mid-page rather than running to the screen's foot.
+      data-editor-bar-shell=""
       style={{
         position: "absolute",
-        // One margin all round: 12px off the top and, via the width cap,
-        // 12px off either side once the bar is wide enough to meet it.
-        top: 12,
+        // One margin all round: 12px off the stage's foot (plus the home
+        // indicator) and, via the width cap, 12px off either side once the
+        // bar is wide enough to meet it.
+        bottom: "calc(12px + env(safe-area-inset-bottom))",
         left: "50%",
         transform: "translateX(-50%)",
         zIndex: 20,
