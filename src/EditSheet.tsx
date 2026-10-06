@@ -14,21 +14,24 @@ import { ArrowLeft, X } from "lucide-react";
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 
-import { DeleteIcon, DuplicateIcon, KeyboardIcon, useTouchDragScrollX } from "./EditorBar";
+import { DeleteIcon, DuplicateIcon, KeyboardIcon } from "./EditorBar";
 import { WedgeSlider } from "./WedgeSlider";
 import { FONTS, FontDef, MAX_FONT_SIZE, MIN_FONT_SIZE, loadFont } from "./fonts";
 import { PathMetrics, TEXT_CURVES, TextCurveId, pathMetrics } from "./textPath";
 
 /**
- * A horizontal strip that scrolls from touch by hand (useTouchDragScrollX) —
- * the tab row, the font strip, the curve strip. Its own component so each
- * strip owns its ref: they mount and unmount with their tabs.
+ * A horizontal strip — the tab row, the font strip, the curve strip. Scrolled
+ * natively, as in the main proto (iOS runs it off the main thread); see the
+ * pan-x note in styles.css for why that works on /scrollversion too.
  */
 function HScroll({ style, children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
-  const ref = useRef<HTMLDivElement>(null);
-  useTouchDragScrollX(ref);
   return (
-    <div ref={ref} className="eb-scroller" style={{ ...style, touchAction: "none" }} {...rest}>
+    <div
+      className="eb-scroller"
+      data-hscroll=""
+      style={{ ...style, touchAction: "pan-x", overscrollBehaviorX: "contain" }}
+      {...rest}
+    >
       {children}
     </div>
   );

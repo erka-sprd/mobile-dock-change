@@ -105,10 +105,77 @@ export const EMPTY_DOCK_PRODUCT: DockProduct = {
   productType: { id: "", appearances: [], sizes: [], views: [] } as unknown as ProductTypeData,
 };
 
-export type DockCatalog = { products: DockProduct[]; featuredProductId: string };
+export type DockCatalog = {
+  products: DockProduct[];
+  featuredProductId: string;
+  /** Raw catalogue products with absolute image URLs — feeds the ported
+      ProductsDrawer (buildTiles, filters, model-image carousel). */
+  rawProducts: StaticProduct[];
+};
+
+// --- Raw-product helpers for the ported products drawer (from the main
+// proto's lib/catalog.ts) --------------------------------------------------
+
+// The catalogue carries a per-colour model-image library (all views × both
+// crops) that the package types don't yet describe — model it locally.
+export type ModelImageRef = { viewId: number; crop: string; image: string };
+type AppearanceWithModels = StaticProduct["appearances"][number] & {
+  modelImages?: ModelImageRef[];
+};
+
+// Rewrite every image field to an absolute catalogue URL once, at load time,
+// so the drawer can use `.image` / `.preview` / `.modelImages` directly.
+function absolutize(products: StaticProduct[]): StaticProduct[] {
+  return products.map((p) => ({
+    ...p,
+    preview: img(p.preview),
+    modelImageFront: p.modelImageFront ? img(p.modelImageFront) : null,
+    appearances: p.appearances.map((a) => {
+      const models = (a as AppearanceWithModels).modelImages;
+      return {
+        ...a,
+        image: img(a.image),
+        modelImage: a.modelImage ? img(a.modelImage) : null,
+        views: a.views.map((v) => ({ ...v, image: img(v.image) })),
+        ...(models
+          ? { modelImages: models.map((m) => ({ ...m, image: img(m.image) })) }
+          : {}),
+      };
+    }),
+  }));
+}
+
+/**
+ * All model/mood images for a product's tile hover carousel: every view of the
+ * given colour, ordered by view, one crop. Falls back to the first colour that
+ * has model images. Returns absolute URLs, or [] when none exist.
+ */
+export function modelImagesFor(
+  product: StaticProduct,
+  appearanceId?: string,
+  crop: string = "detail"
+): string[] {
+  const appearances = product.appearances as AppearanceWithModels[];
+  const source =
+    appearances.find((a) => a.id === appearanceId && a.modelImages?.length) ??
+    appearances.find((a) => a.modelImages?.length);
+  const models = source?.modelImages;
+  if (!models?.length) return [];
+
+  const wanted = models.filter((m) => m.crop === crop);
+  const list = (wanted.length ? wanted : models)
+    .slice()
+    .sort((a, b) => a.viewId - b.viewId)
+    .map((m) => m.image);
+  return Array.from(new Set(list));
+}
 
 /** Fetch the catalogue and adapt every product for mobile-dock. */
 export async function loadDockProducts(): Promise<DockCatalog> {
   const { products, featuredProductId } = await getCatalog(CATALOG_URL);
-  return { products: products.map(toDockProduct), featuredProductId };
+  return {
+    products: products.map(toDockProduct),
+    featuredProductId,
+    rawProducts: absolutize(products),
+  };
 }

@@ -9,8 +9,12 @@ import { DEFAULT_FONT_FAMILY, MAX_FONT_SIZE, getFontVariants, loadFont } from ".
 import { TextCurveId, curveIdForPath, invalidateTextMetrics, textCurve } from "./textPath";
 import { drawTextItem, rotatedExtent, textItemFamily, textItemFont, textItemSize } from "./textRender";
 import SizeSelection from "./SizeSelection";
-import { loadDockProducts, EMPTY_DOCK_PRODUCT } from "./catalog";
+import { loadDockProducts, EMPTY_DOCK_PRODUCT, modelImagesFor } from "./catalog";
 import type { DockProduct } from "./catalog";
+import { buildTiles } from "product-catalog-client";
+import type { StaticProduct } from "product-catalog-client";
+import ProductsDrawer from "./products-drawer/products-drawer";
+import "./products-drawer/tw.css";
 
 /**
  * /scrollversion — the same screen with the checkout sheet laid out inline.
@@ -88,6 +92,8 @@ export default function App() {
 
   // Product catalogue, fetched at runtime from the shared catalog deployment.
   const [products, setProducts] = useState<DockProduct[]>([]);
+  // Raw catalogue products feed the ported all-products drawer (tiles, filters).
+  const [rawProducts, setRawProducts] = useState<StaticProduct[]>([]);
   const [selectedProductId, setSelectedProductId] = useState(
     () => localStorage.getItem("selectedProductId") ?? ""
   );
@@ -101,9 +107,10 @@ export default function App() {
   // what the catalogue actually contains (saved ids may be stale or empty).
   useEffect(() => {
     let cancelled = false;
-    loadDockProducts().then(({ products: loaded, featuredProductId }) => {
+    loadDockProducts().then(({ products: loaded, featuredProductId, rawProducts: raw }) => {
       if (cancelled) return;
       setProducts(loaded);
+      setRawProducts(raw);
       const saved = localStorage.getItem("selectedProductId");
       const initial =
         loaded.find(p => p.id === saved) ??
@@ -119,6 +126,16 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  // Tiles for the all-products drawer, enriched with model/mood images for the
+  // hover carousel — same derivation as the main proto's designer.
+  const allTilesWithModel = useMemo(() => {
+    const { allTiles } = buildTiles(rawProducts);
+    return allTiles.map(t => {
+      const product = rawProducts.find(p => p.id === t.id);
+      return { ...t, modelImages: product ? modelImagesFor(product, t.appearanceId) : [] };
+    });
+  }, [rawProducts]);
 
   const slides = useMemo(
     () => selectedProduct.slidesFor(selectedColor),
@@ -347,6 +364,13 @@ export default function App() {
   const [chevronPressed, setChevronPressed] = useState<"left" | "right" | null>(null);
 
   const hasAnyItems = Object.keys(allDesignItems).some((k) => (allDesignItems[k] as DesignItem[]).length > 0);
+  // Objects on the current product's own print areas. Items are stored by side
+  // name and survive a product switch, so ones left on a side this product does
+  // not have must not count — the print technique choice is about what will
+  // actually be printed here.
+  const hasItemsOnPrintAreas = Object.keys(selectedProduct.printAreas).some(
+    (side) => ((allDesignItems[side] as DesignItem[] | undefined)?.length ?? 0) > 0
+  );
   const activeIsEmpty = designItems.length === 0;
 
   // On-canvas embroidery is active only for embroidery-suitable products (so we
@@ -644,8 +668,15 @@ export default function App() {
   };
 
   const onEditorTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (selectedDesignId) { setSelectedDesignId(null); return; }
+    // No deselect here: a selection must survive a pinch or a pan. A plain tap
+    // still deselects, via the document-level tap handler below.
     if (e.touches.length === 2) {
+      // Main proto: a second finger abandons any object manipulation, so the
+      // object doesn't fly while the canvas zooms.
+      if (designGestureRef.current.type !== "idle") {
+        designGestureRef.current = { type: "idle" };
+        setDesignGestureActive(false);
+      }
       editorSwipeRef.current.active = false;
       if (zoom <= 1) setPan({ x: 0, y: 0 });
       imageGesture.current = {
@@ -728,9 +759,23 @@ export default function App() {
     }
   };
 
-  const onEditorTouchEnd = () => {
+  const onEditorTouchEnd = (e?: React.TouchEvent<HTMLDivElement>) => {
     if (designGestureRef.current.type !== "idle") {
       handleDesignEnd();
+      return;
+    }
+    // Main proto: fingers still down (pinch 2 → 1) re-arm as a pan from here,
+    // so the motion carries on without a jump.
+    if (e && e.touches.length > 0) {
+      if (e.touches.length === 1 && imageGesture.current.lastZoom > 1) {
+        imageGesture.current = {
+          ...imageGesture.current,
+          mode: "pan",
+          startZoom: imageGesture.current.lastZoom,
+          startPan: imageGesture.current.lastPan,
+          startTouch: { x: e.touches[0].clientX, y: e.touches[0].clientY },
+        };
+      }
       return;
     }
     editorSwipeRef.current.active = false;
@@ -980,6 +1025,9 @@ export default function App() {
     // Movement is where a page scroll would actually happen, and a tap has
     // none — so this can be strict without costing a click.
     const onMove = (e: TouchEvent) => {
+      // A horizontal strip on the stage (the editor bar) scrolls natively —
+      // never cancel its movement, even while the product is zoomed
+      if ((e.target as Element | null)?.closest?.("[data-hscroll]")) return;
       if (e.touches.length >= 2 || zoomRef.current > 1) e.preventDefault();
     };
     el.addEventListener("touchstart", onStart, { passive: false });
@@ -987,6 +1035,25 @@ export default function App() {
     return () => {
       el.removeEventListener("touchstart", onStart);
       el.removeEventListener("touchmove", onMove);
+    };
+  }, []);
+
+  // Main proto's page lock: the page itself must never browser-zoom. Safari
+  // ignores the viewport meta's zoom lock, so its gesture events and every
+  // multi-touch move are blocked at the document; the canvas runs its own
+  // pinch. One-finger moves are left alone, so /scrollversion still scrolls.
+  useEffect(() => {
+    const preventGesture = (e: Event) => e.preventDefault();
+    const preventMultiTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 1) e.preventDefault();
+    };
+    document.addEventListener("gesturestart", preventGesture);
+    document.addEventListener("gesturechange", preventGesture);
+    document.addEventListener("touchmove", preventMultiTouchMove, { passive: false });
+    return () => {
+      document.removeEventListener("gesturestart", preventGesture);
+      document.removeEventListener("gesturechange", preventGesture);
+      document.removeEventListener("touchmove", preventMultiTouchMove);
     };
   }, []);
 
@@ -1463,16 +1530,44 @@ export default function App() {
     localStorage.setItem("selectedColor", selectedColor);
   }, [selectedColor]);
 
+  // Tap outside the selection deselects — but only a TAP, like the main proto
+  // (which deselects on `click`, never on a drag, pan or pinch). A touch that
+  // starts outside arms a candidate; moving past the slop or adding a second
+  // finger cancels it; lifting the finger with it still armed deselects.
+  // UI that stops touchstart propagation (editor bar, edit sheet, undo/redo)
+  // never arms it, so it keeps the selection exactly as before.
   useEffect(() => {
     if (!selectedDesignId) return;
-    const handler = (e: TouchEvent) => {
+    const TAP_SLOP_PX = 10;
+    let tap: { x: number; y: number } | null = null;
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length > 1) { tap = null; return; }
       const el = itemElRefs.current.get(selectedDesignId);
       if (el && el.contains(e.target as Node)) return;
       if (doneBtnRef.current && doneBtnRef.current.contains(e.target as Node)) return;
+      tap = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!tap) return;
+      const t = e.touches[0];
+      if (e.touches.length > 1 || !t || Math.hypot(t.clientX - tap.x, t.clientY - tap.y) > TAP_SLOP_PX) tap = null;
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (!tap || e.touches.length > 0) return;
+      tap = null;
       setSelectedDesignId(null);
     };
-    document.addEventListener("touchstart", handler, { passive: true });
-    return () => document.removeEventListener("touchstart", handler);
+    const onCancel = () => { tap = null; };
+    document.addEventListener("touchstart", onStart, { passive: true });
+    document.addEventListener("touchmove", onMove, { passive: true });
+    document.addEventListener("touchend", onEnd, { passive: true });
+    document.addEventListener("touchcancel", onCancel, { passive: true });
+    return () => {
+      document.removeEventListener("touchstart", onStart);
+      document.removeEventListener("touchmove", onMove);
+      document.removeEventListener("touchend", onEnd);
+      document.removeEventListener("touchcancel", onCancel);
+    };
   }, [selectedDesignId]);
 
   const handleDesignMove = (e: React.TouchEvent<HTMLDivElement>) => {
@@ -1970,6 +2065,10 @@ export default function App() {
                         zIndex: isSelected ? 10 : 1,
                       }}
                       onTouchStart={(e) => {
+                        // A second finger landing on the object is a canvas
+                        // pinch, not an object gesture (main proto) — let it
+                        // through to the editor's pinch handling.
+                        if (e.touches.length >= 2) return;
                         e.stopPropagation();
                         // While its textarea is up the box is not draggable —
                         // a touch here is about the caret, not a move.
@@ -2619,7 +2718,11 @@ export default function App() {
 
       {/* Blur overlay — behind ck-drawer and action bar, grows as drawer opens */}
       {(() => {
-        const interp = drawerInterp;
+        // While the sheet itself is hidden (an object selected, or the popup
+        // up on an empty design) its veil must not linger: otherwise the
+        // near-transparent layer swallows every pinch and pan on the canvas.
+        const sheetHidden = !SCROLL_VERSION && (!!selectedDesignId || (showPopup && !hasAnyItems));
+        const interp = sheetHidden ? 0 : drawerInterp;
         return (
           <div data-ck-veil style={{
             position: "fixed",
@@ -2907,7 +3010,7 @@ export default function App() {
               <div>
                 {/* Buttons */}
                 <div style={{ padding: `0 ${Math.round(16 + interp * 4)}px`, display: "flex", flexDirection: "column", gap: 8 }}>
-                  {hasAnyItems && embroiderySupported && (
+                  {hasItemsOnPrintAreas && embroiderySupported && (
                     <div style={{ display: "flex", flexDirection: "column" }}>
                     <span style={{ display: "inline-block", alignSelf: "flex-start", background: "#111", color: "#fff", fontSize: 12, fontWeight: 500, padding: "3px 8px", fontFamily: '"Inter Variable", sans-serif', opacity: interp }}>Print technique</span>
                     <button
@@ -3577,50 +3680,33 @@ export default function App() {
         </Drawer.Portal>
       </Drawer.Root>
 
-      <Drawer.Root open={allProductsDrawerOpen} onOpenChange={setAllProductsDrawerOpen}>
-        <Drawer.Portal>
-          <Drawer.Overlay style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9998 }} />
-          <Drawer.Content style={{
-            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 9999,
-            background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16,
-            outline: "none", fontFamily: '"Inter Variable", sans-serif',
-            display: "flex", flexDirection: "column", height: "calc(100dvh - 32px)",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 16px 16px" }}>
-              <span className="font-outer-sans" style={{ fontSize: 16, fontWeight: 500, color: "#111" }}>All products</span>
-              <img src="/icons/icon-close-x.svg" alt="Close" style={{ width: 24, height: 24, cursor: "pointer" }} onClick={() => setAllProductsDrawerOpen(false)} />
-            </div>
-            <div style={{ overflowY: "auto", flex: 1, padding: "0 16px 24px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                {products.map(p => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedProductId(p.id);
-                      setSelectedColor(p.defaultColor);
-                      setIndex(0);
-                      setActiveIndex(0);
-                      setAllProductsDrawerOpen(false);
-                      setCheckoutDrawerExpanded(true);
-                      setCheckoutDrawerHeight(checkoutDrawerMaxH);
-                      computeHoopframeWarning();
-                      if (showPopup) dismissPopup();
-                      scrollBackToProduct(450);
-                    }}
-                    style={{ background: "none", border: "none", borderRadius: 0, overflow: "hidden", cursor: "pointer", textAlign: "left", padding: 0, width: "100%" }}
-                  >
-                    <div style={{ width: "100%", aspectRatio: "3/4", background: "#e9e9e9", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: selectedProductId === p.id ? "inset 0 0 0 2px #111" : "none" }}>
-                      <img src={p.thumbnail(p.defaultColor)} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-                    </div>
-                    <div style={{ paddingTop: 6, fontSize: 12, fontWeight: 500, color: "#6a6a6a", lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{p.name}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </Drawer.Content>
-        </Drawer.Portal>
-      </Drawer.Root>
+      {/* All-products drawer — the main proto's ProductsDrawer (categories,
+          search, filters, sort, volume-discount calculator), ported verbatim
+          into src/products-drawer/. */}
+      <ProductsDrawer
+        open={allProductsDrawerOpen}
+        onOpenChange={setAllProductsDrawerOpen}
+        tiles={allTilesWithModel}
+        products={rawProducts}
+        onSelect={sel => {
+          const next = products.find(p => p.id === sel.id);
+          if (!next) return;
+          setSelectedProductId(next.id);
+          // The tile's shown colour when the product has it, else its default.
+          setSelectedColor(
+            next.colors.some(c => c.key === sel.appearanceId)
+              ? sel.appearanceId
+              : next.defaultColor
+          );
+          setIndex(0);
+          setActiveIndex(0);
+          setCheckoutDrawerExpanded(true);
+          setCheckoutDrawerHeight(checkoutDrawerMaxH);
+          computeHoopframeWarning();
+          if (showPopup) dismissPopup();
+          scrollBackToProduct(450);
+        }}
+      />
 
       {/* Cart drawer */}
       <Drawer.Root open={cartDrawerOpen} onOpenChange={setCartDrawerOpen}>

@@ -196,16 +196,24 @@ body.scroll-version [data-app-actionbar] {
 /* Let a finger scroll the page anywhere. The sheet's own drag gestures are off
    inline (SCROLL_VERSION in App.tsx); these are the inline styles that would
    still swallow the movement. */
+/* pan-x as well as pan-y: iOS intersects touch-action down the ancestor chain,
+   so pan-y alone here left the horizontal strips inside (the editor bar, the
+   edit sheet's tabs and font/curve strips) nothing to scroll with — they had
+   to be driven from JS, which lagged next to native scrolling. Nothing on the
+   page itself scrolls sideways, so allowing pan-x costs nothing; pinch stays
+   excluded (no pinch-zoom), the stage handles that itself. */
 body.scroll-version [data-app-root],
 body.scroll-version [data-app-editor] {
-  touch-action: pan-y !important;
+  touch-action: pan-x pan-y !important;
   overscroll-behavior: auto !important;
 }
 
 /* …except while the product is zoomed in, when a finger on the stage is panning
-   it and the page must hold still. Set by App.tsx from the zoom level. */
+   it and the page must hold still. Set by App.tsx from the zoom level. pan-x,
+   not none, for the same reason: the strips on the stage still scroll; the
+   stage's own touchmove listener holds the product pan (and skips the strips). */
 body.scroll-version [data-app-editor][data-zoomed] {
-  touch-action: none !important;
+  touch-action: pan-x !important;
 }
 
 @keyframes skeletonShimmer {

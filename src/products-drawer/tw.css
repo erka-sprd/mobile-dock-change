@@ -1,0 +1,82 @@
+/* Tailwind utilities for the ported products drawer only. Preflight is
+   disabled project-wide (tailwind.config.js), so `.tw-scope` carries the few
+   preflight rules the drawer's markup depends on. Every ported portal root
+   (Drawer.Content / popover content) gets this class.
+
+   All reset selectors sit inside :where() so they keep ZERO specificity, like
+   Tailwind's real preflight — utility classes must always win over them. */
+@tailwind utilities;
+
+:where(.tw-scope),
+:where(.tw-scope *),
+:where(.tw-scope *::before),
+:where(.tw-scope *::after) {
+  box-sizing: border-box;
+  border-width: 0;
+  border-style: solid;
+  border-color: #e5e7eb;
+}
+
+:where(.tw-scope) {
+  font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.5;
+  color: #000;
+}
+
+:where(.tw-scope h1),
+:where(.tw-scope h2),
+:where(.tw-scope h3),
+:where(.tw-scope p) {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+:where(.tw-scope button),
+:where(.tw-scope input),
+:where(.tw-scope select) {
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background-color: transparent;
+  background-image: none;
+  text-transform: none;
+  letter-spacing: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+:where(.tw-scope input[type="text"]),
+:where(.tw-scope input[type="search"]),
+:where(.tw-scope input[type="number"]) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+:where(.tw-scope ul),
+:where(.tw-scope ol) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+:where(.tw-scope img),
+:where(.tw-scope svg) {
+  display: block;
+  vertical-align: middle;
+}
+
+:where(.tw-scope img) {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Matches the main proto's globals.css utility used by the chip bar. */
+.tw-scope .no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.tw-scope .no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
