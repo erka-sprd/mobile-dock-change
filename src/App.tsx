@@ -3219,30 +3219,39 @@ export default function App() {
                 <div style={{ padding: `0 ${Math.round(16 + interp * 4)}px`, display: "flex", flexDirection: "column", gap: 8 }}>
                   {hasItemsOnPrintAreas && embroiderySupported && (
                     <div style={{ display: "flex", flexDirection: "column" }}>
-                    {/* Pill switcher (the design's "Pill Button Group"): a
-                        light grey track, the chosen technique on a white pill
-                        that slides between the two. Replaces the dropdown —
-                        the old technique drawer is no longer opened. 54px tall
-                        overall, level with the size trigger below. */}
-                    <div role="radiogroup" aria-label="Print technique" style={{ position: "relative", display: "flex", height: 54, padding: 5, boxSizing: "border-box", borderRadius: 999, background: "#F4F4F4", opacity: interp }}>
-                      <span
-                        aria-hidden="true"
-                        style={{
-                          position: "absolute",
-                          top: 5,
-                          bottom: 5,
-                          left: 5,
-                          width: "calc(50% - 5px)",
-                          borderRadius: 999,
-                          background: "#fff",
-                          transform: savedPrintTechnique === "embroidery" ? "translateX(100%)" : "translateX(0)",
-                          transition: "transform 0.25s cubic-bezier(0.16,1,0.3,1)",
-                        }}
-                      />
+                    {/* Option cards: one per print technique — its name, and
+                        for embroidery the extra it costs. They share the row while
+                        there are two; past that each keeps a 140px minimum
+                        and the row scrolls sideways, the next card peeking in
+                        (bleeding to the sheet edge like the colour row). 8px
+                        radius as the colour tiles; the chosen card gets a
+                        1px black frame like the selected colour tile — drawn
+                        inset, so selecting never shifts the layout. */}
+                    <div
+                      role="radiogroup"
+                      aria-label="Print technique"
+                      data-hscroll=""
+                      onTouchStart={onHorizontalTouchStart}
+                      onTouchMove={onHorizontalTouchMove}
+                      onTouchEnd={onHorizontalTouchEnd}
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        overflowX: "auto",
+                        scrollbarWidth: "none",
+                        margin: `0 -${Math.round(16 + interp * 4)}px`,
+                        padding: `0 ${Math.round(16 + interp * 4)}px`,
+                        touchAction: checkoutDrawerExpanded ? "auto" : "pan-x",
+                        opacity: interp,
+                        // 14px clear below, as above (the colour row's 14px
+                        // margin): 6px here on top of the column's 8px gap.
+                        marginBottom: 6,
+                      }}
+                    >
                       {([
-                        { key: "standard", label: "Standard print" },
-                        { key: "embroidery", label: "Embroidery" },
-                      ] as const).map(({ key, label }) => {
+                        { key: "standard", label: "Standard print", extra: null },
+                        { key: "embroidery", label: "Embroidery", extra: "+5 €" },
+                      ] as const).map(({ key, label, extra }) => {
                         const selected = savedPrintTechnique === key;
                         return (
                           <button
@@ -3264,24 +3273,27 @@ export default function App() {
                               });
                             }}
                             style={{
-                              position: "relative",
-                              flex: 1,
+                              flex: "1 0 140px",
                               minWidth: 0,
-                              height: "100%",
-                              borderRadius: 999,
+                              // The selected colour tile's 50px.
+                              height: 50,
+                              boxSizing: "border-box",
+                              borderRadius: 8,
                               border: "none",
-                              background: "none",
+                              boxShadow: selected ? "inset 0 0 0 1px #111" : "inset 0 0 0 1px #c7c7c7",
+                              background: selected ? "#fff" : "transparent",
                               color: "#111",
                               display: "flex",
                               alignItems: "center",
-                              justifyContent: "center",
-                              padding: "0 12px",
-                              fontSize: 14,
-                              fontWeight: 600,
+                              gap: 6,
+                              padding: "0 14px",
+                              textAlign: "left",
                               cursor: selected ? "default" : "pointer",
+                              transition: "box-shadow 0.15s ease, background 0.15s ease",
                             }}
                           >
-                            <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{label}</span>
+                            <span style={{ minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", fontSize: 14, fontWeight: 600 }}>{label}</span>
+                            {extra && <span style={{ flexShrink: 0, fontSize: 14, color: "#6a6a6a" }}>{extra}</span>}
                           </button>
                         );
                       })}
@@ -3354,13 +3366,34 @@ export default function App() {
                       </span>
                     </button>
                   </div>
-                  {oos.length > 0 && (
-                    <div style={{ fontSize: 15, color: "#6a6a6a", opacity: interp }}>
-                      {oos.slice(0, -1).join(", ")}{oos.length > 1 ? " and " : ""}{oos[oos.length - 1]} out of stock
-                    </div>
-                  )}
                 </div>
                 <div style={{ opacity: interp }}>
+
+                {/* Stock — its own bordered block, styled like the shipping
+                    block below it: every size of the chosen colour, the
+                    out-of-stock ones struck through and greyed (the size
+                    sheet's treatment). */}
+                {selectedProduct.sizes.length > 0 && (
+                  // 6px on top of the size row's own 10px margin = 16px,
+                  // matching the shipping block's 16px gap below.
+                  <div style={{ border: `1px solid rgba(199,199,199,${interp})`, borderRadius: 0, margin: `6px ${Math.round(16 + interp * 4)}px 0`, padding: 16, transition: "border-color 0.3s ease" }}>
+                    <div style={{ fontSize: 14, fontWeight: 500, color: "#111", marginBottom: 10 }}>Available sizes</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", columnGap: 16, rowGap: 6 }}>
+                      {selectedProduct.sizes.map(size => {
+                        const out = oos.indexOf(size) !== -1;
+                        return (
+                          <span
+                            key={size}
+                            aria-label={out ? `${size}, out of stock` : size}
+                            style={{ fontSize: 14, fontWeight: 600, color: out ? "#afafaf" : "#111", textDecoration: out ? "line-through" : "none" }}
+                          >
+                            {size}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Shipping info */}
                 <div style={{ border: `1px solid rgba(199,199,199,${interp})`, borderRadius: 0, overflow: "hidden", margin: `16px ${Math.round(16 + interp * 4)}px 0`, transition: "border-color 0.3s ease" }}>
